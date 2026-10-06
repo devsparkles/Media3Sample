@@ -14,6 +14,13 @@ class HelloWorldViewModel : ViewModel() {
         val player = ExoPlayer.Builder(context).build()
 
 
+        // that is the main thread
+        player.applicationLooper
+
+
+        // the thread from which an exoplayer instance
+        // must be accessed can be explicitly specified by passing a Looper
+
 
     }
 }
