@@ -52,7 +52,10 @@ lecture **MPEG-DASH**, DRM **Widevine**, pubs **VMAP/VAST** (pre/mid/post-rolls,
 | `ads/parser/VmapParser.kt` | VMAP → liste d'AdBreak bruts (`AdTagURI` ou VAST embarqué). |
 | `ads/parser/VastParser.kt` | VAST → `InLine` / `Wrapper`, MediaFiles, tracking, skipoffset. |
 | `ads/AdRepositoryImpl.kt` | **Orchestration** : VMAP → VAST en parallèle (`async`), suivi des Wrappers (5 au maximum), fusion du tracking de chaque niveau, timeouts, codes d'erreur VAST. |
-| `ads/HttpAdTracker.kt` | Envoi des pixels (« fire and forget »), macros `[ERRORCODE]` et `[CACHEBUSTING]`. |
+| `ads/HttpAdTracker.kt` | Envoi des pixels (« fire and forget ») ; instantané des macros pris au moment de l'événement. |
+| `ads/macro/MacroStrategy.kt` | **Pattern Strategy** : interface `MacroStrategy` + `MacroContext` (instantané figé une fois par événement → même `[TIMESTAMP]` partout). |
+| `ads/macro/MacroStrategies.kt` | Une stratégie par macro : `[TIMESTAMP]`, `[CACHEBUSTING]`, `[ERRORCODE]`, `[ADPLAYHEAD]`, `[ASSETURI]`. |
+| `ads/macro/MacroExpander.kt` | Repère `[MACRO]` et `%5BMACRO%5D`, délègue, encode ; `-1` si valeur inconnue, macros inconnues intactes. |
 | `content/FakeContentRepository.kt` | Catalogue de démo : Widevine + VMAP, VAST skippable, Widevine sans pub, licence invalide. |
 
 ### `:player:engine`

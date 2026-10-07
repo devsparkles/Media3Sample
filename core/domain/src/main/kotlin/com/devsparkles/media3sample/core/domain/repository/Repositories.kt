@@ -1,6 +1,7 @@
 package com.devsparkles.media3sample.core.domain.repository
 
 import com.devsparkles.media3sample.core.domain.model.AdSchedule
+import com.devsparkles.media3sample.core.domain.model.TrackingContext
 import com.devsparkles.media3sample.core.domain.model.VideoContent
 
 /**
@@ -32,7 +33,7 @@ interface AdRepository {
 interface AdTracker {
     /**
      * @param urls URLs de tracking (peuvent contenir des macros VAST comme [CACHEBUSTING])
-     * @param errorCode code d'erreur VAST (ex : 405 = fichier média illisible) pour la macro [ERRORCODE]
+     * @param context valeurs connues du player pour remplacer les macros ([ERRORCODE], [ADPLAYHEAD]...)
      */
-    fun track(urls: List<String>, errorCode: Int? = null)
+    fun track(urls: List<String>, context: TrackingContext = TrackingContext())
 }

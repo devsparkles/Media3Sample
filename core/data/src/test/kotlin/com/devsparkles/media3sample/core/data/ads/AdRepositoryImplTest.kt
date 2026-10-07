@@ -4,6 +4,7 @@ import com.devsparkles.media3sample.core.data.network.HttpClient
 import com.devsparkles.media3sample.core.domain.model.AdBreakPosition
 import com.devsparkles.media3sample.core.domain.model.AdSchedule
 import com.devsparkles.media3sample.core.domain.model.AdTrackingEvent
+import com.devsparkles.media3sample.core.domain.model.TrackingContext
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -25,8 +26,8 @@ class AdRepositoryImplTest {
 
     private class RecordingTracker : AdTracker {
         val calls = mutableListOf<Pair<List<String>, Int?>>()
-        override fun track(urls: List<String>, errorCode: Int?) {
-            calls += urls to errorCode
+        override fun track(urls: List<String>, context: TrackingContext) {
+            calls += urls to context.errorCode
         }
     }
 

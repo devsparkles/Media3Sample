@@ -11,6 +11,7 @@ import com.devsparkles.media3sample.core.domain.model.AdBreakEvent
 import com.devsparkles.media3sample.core.domain.model.AdBreakPosition
 import com.devsparkles.media3sample.core.domain.model.AdSchedule
 import com.devsparkles.media3sample.core.domain.model.LinearAd
+import com.devsparkles.media3sample.core.domain.model.TrackingContext
 import com.devsparkles.media3sample.core.domain.repository.AdRepository
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
 import com.devsparkles.media3sample.core.domain.usecase.MediaFileSelector
@@ -82,7 +83,7 @@ class AdRepositoryImpl(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            tracker.track(vmapBreak.trackingEvents[AdBreakEvent.ERROR].orEmpty(), VAST_ERROR_XML_PARSING)
+            tracker.track(vmapBreak.trackingEvents[AdBreakEvent.ERROR].orEmpty(), TrackingContext(errorCode = VAST_ERROR_XML_PARSING))
             null
         }
     }
@@ -96,7 +97,7 @@ class AdRepositoryImpl(
         val ads = vast.ads.flatMap { resolveAd(it, TrackingData(), depth = 0) }
         if (ads.isEmpty()) {
             // "No ad" : la spec demande d'appeler les <Error> racine avec le code 303.
-            tracker.track(vast.errorUrls, VAST_ERROR_NO_ADS)
+            tracker.track(vast.errorUrls, TrackingContext(errorCode = VAST_ERROR_NO_ADS))
             return null
         }
         return AdBreak(id = id, position = position, ads = ads, trackingEvents = breakTracking)
@@ -109,12 +110,12 @@ class AdRepositoryImpl(
             is VastAd.InLine -> listOfNotNull(toLinearAd(ad, tracking))
             is VastAd.Wrapper -> {
                 if (depth >= maxWrapperDepth) {
-                    tracker.track(tracking.errorUrls, VAST_ERROR_WRAPPER_LIMIT)
+                    tracker.track(tracking.errorUrls, TrackingContext(errorCode = VAST_ERROR_WRAPPER_LIMIT))
                     return emptyList()
                 }
                 val child = runCatching { vastParser.parse(http.get(ad.vastAdTagUri)) }.getOrElse {
                     if (it is CancellationException) throw it
-                    tracker.track(tracking.errorUrls, VAST_ERROR_WRAPPER_TIMEOUT)
+                    tracker.track(tracking.errorUrls, TrackingContext(errorCode = VAST_ERROR_WRAPPER_TIMEOUT))
                     return emptyList()
                 }
                 child.ads.flatMap { resolveAd(it, tracking, depth + 1) }
@@ -125,7 +126,7 @@ class AdRepositoryImpl(
     private fun toLinearAd(ad: VastAd.InLine, tracking: TrackingData): LinearAd? {
         val mediaFile = MediaFileSelector.select(ad.mediaFiles) ?: run {
             // 403 = "Couldn't find MediaFile that is supported by this video player".
-            tracker.track(tracking.errorUrls, VAST_ERROR_NO_SUPPORTED_MEDIA)
+            tracker.track(tracking.errorUrls, TrackingContext(errorCode = VAST_ERROR_NO_SUPPORTED_MEDIA))
             return null
         }
         return LinearAd(

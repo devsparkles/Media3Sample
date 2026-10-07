@@ -14,6 +14,7 @@ import com.devsparkles.media3sample.core.domain.model.AdBreakEvent
 import com.devsparkles.media3sample.core.domain.model.AdSchedule
 import com.devsparkles.media3sample.core.domain.model.AdTrackingEvent
 import com.devsparkles.media3sample.core.domain.model.LinearAd
+import com.devsparkles.media3sample.core.domain.model.TrackingContext
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,7 +141,9 @@ class VmapAdsLoader(
         adIndexInAdGroup: Int,
         exception: IOException,
     ) {
-        adAt(adGroupIndex, adIndexInAdGroup)?.let { tracker.track(it.errorUrls, VAST_ERROR_MEDIA_PLAYBACK) }
+        adAt(adGroupIndex, adIndexInAdGroup)?.let {
+            tracker.track(it.errorUrls, TrackingContext(errorCode = VAST_ERROR_MEDIA_PLAYBACK, assetUri = it.mediaFile.url))
+        }
         // Marquer la pub en erreur -> ExoPlayer la saute et passe à la suivante / au contenu.
         adPlaybackState?.let { publish(it.withAdLoadError(adGroupIndex, adIndexInAdGroup)) }
     }
@@ -167,7 +170,7 @@ class VmapAdsLoader(
         val skipOffset = ad.skipOffsetMs ?: return
         if (player.currentPosition < skipOffset) return
 
-        tracker.track(ad.trackingEvents[AdTrackingEvent.SKIP].orEmpty())
+        tracker.track(ad.trackingEvents[AdTrackingEvent.SKIP].orEmpty(), ad.trackingContext(player.currentPosition))
         playingAd = null
         // Marquer SKIPPED dans l'AdPlaybackState suffit : ExoPlayer quitte immédiatement la pub.
         adPlaybackState?.let { publish(it.withSkippedAd(group, index)) }
@@ -178,7 +181,7 @@ class VmapAdsLoader(
     fun onAdClicked(): String? {
         val player = player ?: return null
         val ad = adAt(player.currentAdGroupIndex, player.currentAdIndexInAdGroup) ?: return null
-        tracker.track(ad.trackingEvents[AdTrackingEvent.CLICK_TRACKING].orEmpty())
+        tracker.track(ad.trackingEvents[AdTrackingEvent.CLICK_TRACKING].orEmpty(), ad.trackingContext(player.currentPosition))
         eventListener?.onAdClicked()
         return ad.clickThroughUrl
     }
@@ -215,13 +218,13 @@ class VmapAdsLoader(
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             val current = playingAd ?: return
             val event = if (playWhenReady) AdTrackingEvent.RESUME else AdTrackingEvent.PAUSE
-            tracker.track(current.ad.trackingEvents[event].orEmpty())
+            tracker.track(current.ad.trackingEvents[event].orEmpty(), current.ad.trackingContext(player?.currentPosition))
         }
 
         override fun onVolumeChanged(volume: Float) {
             val current = playingAd ?: return
             val event = if (volume == 0f) AdTrackingEvent.MUTE else AdTrackingEvent.UNMUTE
-            tracker.track(current.ad.trackingEvents[event].orEmpty())
+            tracker.track(current.ad.trackingEvents[event].orEmpty(), current.ad.trackingContext(player?.currentPosition))
         }
     }
 
@@ -249,21 +252,21 @@ class VmapAdsLoader(
         val group = player.currentAdGroupIndex
         val index = player.currentAdIndexInAdGroup
         val ad = adAt(group, index) ?: return
+        // Pendant une pub, player.duration / currentPosition concernent LA PUB (pas le contenu).
+        val durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: ad.durationMs
+        val positionMs = player.currentPosition
 
         // L'impression ne part que quand la pub JOUE vraiment (et pas pendant le buffering
         // initial) : c'est ce que les régies facturent, et l'IAB/MRC parle de "1re frame rendue".
         if (playingAd?.matches(group, index) != true && player.isPlaying) {
             playingAd = PlayingAd(group, index, ad, AdProgressTracker())
             if (index == 0) trackBreak(group, AdBreakEvent.BREAK_START)
-            tracker.track(ad.impressionUrls)
+            tracker.track(ad.impressionUrls, ad.trackingContext(positionMs))
         }
 
-        // Pendant une pub, player.duration / currentPosition concernent LA PUB (pas le contenu).
-        val durationMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0 } ?: ad.durationMs
-        val positionMs = player.currentPosition
         playingAd?.takeIf { it.matches(group, index) }?.progress
             ?.onProgress(positionMs, durationMs)
-            ?.forEach { event -> tracker.track(ad.trackingEvents[event].orEmpty()) }
+            ?.forEach { event -> tracker.track(ad.trackingEvents[event].orEmpty(), ad.trackingContext(positionMs)) }
 
         val skipOffsetMs = ad.skipOffsetMs
         _currentAd.value = AdUiInfo(
@@ -281,7 +284,7 @@ class VmapAdsLoader(
         val ad = adAt(group, index) ?: return
         val tracked = playingAd?.takeIf { it.matches(group, index) }
         if (tracked == null || tracked.progress.markComplete()) {
-            tracker.track(ad.trackingEvents[AdTrackingEvent.COMPLETE].orEmpty())
+            tracker.track(ad.trackingEvents[AdTrackingEvent.COMPLETE].orEmpty(), ad.trackingContext(ad.durationMs))
         }
         playingAd = null
         // PLAYED : si l'utilisateur revient en arrière avant ce mid-roll, il ne sera pas rejoué.
@@ -299,6 +302,10 @@ class VmapAdsLoader(
     }
 
     private fun adAt(group: Int, index: Int): LinearAd? = breaks.getOrNull(group)?.ads?.getOrNull(index)
+
+    /** Valeurs connues du player pour les macros [ADPLAYHEAD] et [ASSETURI]. */
+    private fun LinearAd.trackingContext(positionMs: Long?) =
+        TrackingContext(adPlayheadMs = positionMs, assetUri = mediaFile.url)
 
     private class PlayingAd(val group: Int, val index: Int, val ad: LinearAd, val progress: AdProgressTracker) {
         fun matches(group: Int, index: Int) = this.group == group && this.index == index
