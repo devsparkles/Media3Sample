@@ -2,7 +2,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Streaming, licences DRM, VMAP/VAST et pixels de tracking. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Requis par ExoPlayer.setWakeMode(C.WAKE_MODE_NETWORK). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      Note : certains pixels de tracking pub sont encore en http://. Android 9+ bloque le
+      trafic en clair par défaut ; en prod on ajoute un network_security_config ciblé
+      plutôt que usesCleartextTraffic="true" global.
+      https://developer.android.com/privacy-and-security/security-config
+    -->
     <application
+        android:name=".MediaSampleApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

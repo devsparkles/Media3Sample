@@ -1,0 +1,36 @@
+# CI : lance tous les tests JVM (domain, data, engine sous Robolectric) à chaque PR et sur master.
+# Aucun émulateur nécessaire : c'est tout l'intérêt d'avoir les règles métier en Kotlin pur
+# et un ExoPlayer testable sous Robolectric.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # gradle/gradle-daemon-jvm.properties demande un JDK 25 pour le daemon Gradle.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # Cache des dépendances et du wrapper Gradle entre deux exécutions.
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests
+        run: ./gradlew test --console=plain
+
+      # Rapports HTML consultables en cas d'échec (onglet « Artifacts » du run).
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: '**/build/reports/tests/'
