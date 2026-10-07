@@ -40,7 +40,7 @@ class AppContainer(context: Context) {
 
     private val adTracker: AdTracker = HttpAdTracker(httpClient, applicationScope) { Log.d("AdTracker", it) }
 
-    private val adRepository = AdRepositoryImpl(httpClient, adTracker)
+    private val adRepository = AdRepositoryImpl(httpClient, adTracker, logger = { Log.w("AdRepository", it) })
 
     private val contentRepository = FakeContentRepository()
 

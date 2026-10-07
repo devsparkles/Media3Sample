@@ -4,6 +4,7 @@ import com.devsparkles.media3sample.core.data.ads.macro.MacroExpander
 import com.devsparkles.media3sample.core.data.network.HttpClient
 import com.devsparkles.media3sample.core.domain.model.TrackingContext
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -12,10 +13,9 @@ import kotlinx.coroutines.launch
  *
  * - "Fire and forget" : on lance une coroutine dans un scope APPLICATIF (pas celui de l'écran),
  *   pour qu'un pixel "complete" parte même si l'utilisateur quitte l'écran juste après.
- * - Macros VAST : déléguées à MacroExpander (design pattern Strategy, voir le package `macro`).
- *   L'instantané des valeurs ([TIMESTAMP], [CACHEBUSTING]) est pris de façon SYNCHRONE dans
- *   track(), donc à l'heure de l'événement, et partagé par toutes les URLs de cet événement.
- *   S'il était pris dans la coroutine, l'heure dépendrait de la charge du pool de threads.
+ * - Macros : remplacées par MacroExpander JUSTE AVANT chaque requête, car la spec VAST 4.1 §6.2
+ *   définit [TIMESTAMP] comme l'heure d'accès à l'URI. Les données de l'événement (erreur,
+ *   positions) viennent du TrackingContext fourni par le player.
  * - En production : file d'attente persistée (WorkManager) + retry, car des impressions perdues
  *   hors-ligne = revenus perdus. Et logs vers l'outil d'observabilité (Datadog, Firebase...).
  */
@@ -28,13 +28,17 @@ class HttpAdTracker(
 
     override fun track(urls: List<String>, context: TrackingContext) {
         if (urls.isEmpty()) return
-        val snapshot = macroExpander.snapshot(context)
         scope.launch {
             urls.forEach { raw ->
-                val url = macroExpander.expand(raw, snapshot)
-                runCatching { http.fire(url) }
-                    .onSuccess { logger("tracking OK $url") }
-                    .onFailure { logger("tracking FAILED $url : ${it.message}") }
+                val url = macroExpander.expand(raw, context)
+                try {
+                    http.fire(url)
+                    logger("tracking OK $url")
+                } catch (e: CancellationException) {
+                    throw e // annulation coopérative : ce n'est pas un échec de tracking
+                } catch (e: Exception) {
+                    logger("tracking FAILED $url : ${e.message}")
+                }
             }
         }
     }
