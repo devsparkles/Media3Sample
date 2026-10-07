@@ -304,6 +304,12 @@ class VmapAdsLoader(
     private fun adAt(group: Int, index: Int): LinearAd? = breaks.getOrNull(group)?.ads?.getOrNull(index)
 
     /**
+     * Identifiant VAST (`<Ad id>`) de la pub à cette position, pour la mesure d'audience
+     * (Nielsen exige un `assetid` par pub). Lecture seule : n'influence pas le tracking VAST.
+     */
+    fun adIdAt(adGroupIndex: Int, adIndexInAdGroup: Int): String? = adAt(adGroupIndex, adIndexInAdGroup)?.id
+
+    /**
      * Valeurs connues du player pour les macros VAST : [ADPLAYHEAD], [ASSETURI],
      * [BREAKPOSITION] et [MEDIAPLAYHEAD]. Pendant une pub, `contentPosition` donne la position
      * du CONTENU à laquelle la pub est insérée (0 pour un pre-roll).

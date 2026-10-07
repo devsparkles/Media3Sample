@@ -125,11 +125,28 @@ class PlayerViewModel(
         session.adViewProvider.delegate = provider
     }
 
-    /** App en arrière-plan : on met en pause (pas de lecture en background dans ce sample). */
+    /**
+     * App en arrière-plan (ON_STOP) : on met en pause (pas de lecture en background dans ce sample).
+     * Mesure d'audience : la pause SUSPEND la session (Nielsen : `stop()`, d'après les
+     * « interruption scenarios » : « Call stop as soon as the app goes to background »), elle
+     * ne la TERMINE pas. La fin (`end()`) a lieu à la libération du player (onCleared).
+     */
     fun onBackground() {
+        session.onAppBackground()
         session.player.pause()
     }
 
+    /** Retour au premier plan (ON_START). La lecture reste en pause : l'utilisateur relance. */
+    fun onForeground() {
+        session.onAppForeground()
+    }
+
+    /**
+     * Fermeture de session garantie ici, une seule fois : session.release() termine la mesure
+     * d'audience AVANT de libérer le player (le traducteur est idempotent).
+     * Les autres fins de session (erreur, y compris BEHIND_LIVE_WINDOW, fin du contenu) sont
+     * détectées automatiquement par le traducteur : rien à appeler depuis ce ViewModel.
+     */
     override fun onCleared() {
         session.player.removeListener(playerListener)
         session.release()

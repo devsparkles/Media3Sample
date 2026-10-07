@@ -1,6 +1,7 @@
 package com.devsparkles.media3sample.player.engine
 
 import android.content.Context
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -15,10 +16,14 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.util.EventLogger
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
+import com.devsparkles.media3sample.core.domain.tracking.CompositeTracker
+import com.devsparkles.media3sample.core.domain.tracking.PlaybackTracker
+import com.devsparkles.media3sample.core.domain.tracking.dispatchTo
 import com.devsparkles.media3sample.core.domain.usecase.LoadAdScheduleUseCase
 import com.devsparkles.media3sample.player.engine.ads.DeferredAdViewProvider
 import com.devsparkles.media3sample.player.engine.ads.VmapAdsLoader
 import com.devsparkles.media3sample.player.engine.analytics.PlaybackAnalyticsLogger
+import com.devsparkles.media3sample.player.engine.tracking.PlayerEventTranslator
 
 /**
  * RÔLE : construire et configurer une instance d'ExoPlayer prête pour DASH + Widevine + pubs.
@@ -50,6 +55,8 @@ class PlayerFactory(
     private val loadAdSchedule: LoadAdScheduleUseCase,
     private val adTracker: AdTracker,
     private val userAgent: String,
+    /** Outils de mesure d'audience, construits dans AppContainer (DI manuelle). */
+    private val playbackTrackers: List<PlaybackTracker> = emptyList(),
     private val enableDebugLogs: Boolean = true,
 ) {
 
@@ -167,7 +174,26 @@ class PlayerFactory(
         player.addAnalyticsListener(PlaybackAnalyticsLogger())
         if (enableDebugLogs) player.addAnalyticsListener(EventLogger())
 
-        return PlayerSession(player, adsLoader, adViewProvider)
+        // --- 9. Mesure d'audience (Nielsen, outil maison...) ----------------------------------
+        // DISTINCT du tracking pub (AdTracker / pixels VAST, branché dans VmapAdsLoader).
+        // Le traducteur écoute le player, la state machine du domaine produit des événements
+        // normalisés, et le CompositeTracker les diffuse à chaque outil, isolé des autres.
+        val audience = CompositeTracker(playbackTrackers) { tracker, error ->
+            Log.e(TRACKING_TAG, "tracker ${tracker.name} en erreur (ignorée, la lecture continue)", error)
+        }
+        val translator = PlayerEventTranslator(
+            player = player,
+            adIdProvider = adsLoader::adIdAt,
+            log = if (enableDebugLogs) { message -> Log.d(TRACKING_TAG, message) } else null,
+            sink = { event -> event.dispatchTo(audience) },
+        )
+
+        return PlayerSession(player, adsLoader, adViewProvider, translator, audience)
+    }
+
+    companion object {
+        /** Logcat : timeline lisible « callback Media3 → événement normalisé → appel SDK ». */
+        const val TRACKING_TAG = "PlaybackTracking"
     }
 }
 
@@ -183,8 +209,30 @@ class PlayerSession internal constructor(
     val player: ExoPlayer,
     val adsLoader: VmapAdsLoader,
     val adViewProvider: DeferredAdViewProvider,
+    private val tracking: PlayerEventTranslator,
+    private val audience: PlaybackTracker,
 ) {
+    private var inBackground = false
+
+    /**
+     * App en arrière-plan. Nielsen : `appInBackground()` (cf. NielsenTracker). La pause du player
+     * qui suit (ViewModel.onBackground) produit l'événement Paused -> `stop()` côté Nielsen.
+     */
+    fun onAppBackground() {
+        if (inBackground) return
+        inBackground = true
+        audience.onAppBackground()
+    }
+
+    fun onAppForeground() {
+        if (!inBackground) return
+        inBackground = false
+        audience.onAppForeground()
+    }
+
     fun release() {
+        // AVANT player.release() : la fin de session lit la dernière position du player.
+        tracking.release()
         adsLoader.setPlayer(null)
         player.release()
         adsLoader.release()

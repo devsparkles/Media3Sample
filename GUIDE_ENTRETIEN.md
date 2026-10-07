@@ -170,3 +170,134 @@ Docs : [ExoPlayer](https://developer.android.com/media/media3/exoplayer) · [Per
 - Mid-rolls en pourcentage (`timeOffset="50%"`), qui nécessitent la durée du contenu (`handleContentTimelineChanged`).
 - Pubs non linéaires, compagnons et pause ads. Intégration de l'OM SDK.
 - Tests instrumentés avec `media3-test-utils` et CI (GitHub Actions : `./gradlew test lint`).
+
+---
+
+## 7. Tracking d'audience
+
+### 7.1 Ce que c'est, et ce que ce n'est pas
+Il y a **deux** trackings distincts dans le player. Ils ne partagent ni contrat ni code :
+
+| | Tracking pub (`AdTracker`) | Mesure d'audience (`PlaybackTracker`) |
+|---|---|---|
+| Question | « La régie a-t-elle diffusé sa pub ? » | « Combien de temps a-t-on regardé ce programme, et quelles pubs ? » |
+| Cible | URLs de pixels fournies par le VAST | SDK Nielsen, outil maison (cas d'un client comme Canal+) |
+| Rythme | Un GET par événement (impression, quartiles…) | Un battement de cœur (playhead) **toutes les secondes** |
+| Branché dans | `VmapAdsLoader` | `PlayerEventTranslator` (dans `PlayerFactory`) |
+
+### 7.2 Architecture
+```
+ Media3 (Player.Listener)                                     :player:engine
+   callbacks individuels ──► raisons (seek ? repeat ? cause de la pause ?)
+   onEvents(player, events) ──► PlayerSnapshot (état CONSOLIDÉ)    PlayerEventTranslator
+   ticker 1 s (applicationLooper) ──► snapshot                      (seul code qui connaît Media3)
+                          │
+                          ▼                                         :core:domain (Kotlin pur)
+                PlaybackSessionStateMachine ──► PlaybackEvent (SessionStarted, Paused, Tick…)
+                          │  dispatchTo()
+                          ▼
+                    CompositeTracker  (fan-out + isolation des exceptions)
+                     │            │
+                     ▼            ▼                                 :core:data (Kotlin pur)
+              NielsenTracker   InHouseTracker
+              (règles Nielsen) (beacons + heartbeat toutes les 10 s)
+                     │
+                     ▼
+              NielsenSdkGateway ──► LoggingNielsenSdkGateway (Logcat « Nielsen »)
+              ⚠️ le SDK Nielsen réel n'est PAS inclus (propriétaire, appid fourni par Nielsen)
+```
+
+| Fichier | Rôle |
+|---|---|
+| `core/domain/…/tracking/TrackingModels.kt` | `TrackedContent`, `TrackedAdBreak`, `TrackedAd`, `Playhead`, `PauseReason`, `SessionEndReason` |
+| `core/domain/…/tracking/PlaybackEvent.kt` | Événements normalisés + `dispatchTo(tracker)` (un `when` exhaustif) |
+| `core/domain/…/tracking/PlaybackTracker.kt` | Le contrat commun à tous les outils (pattern Adapter) |
+| `core/domain/…/tracking/CompositeTracker.kt` | Fan-out : un tracker qui plante ne casse ni la lecture ni les autres |
+| `core/domain/…/tracking/PlaybackSessionStateMachine.kt` | Snapshots → événements ; toutes les décisions (buffering, repeat, erreur…) |
+| `core/data/…/tracking/nielsen/NielsenTracker.kt` | Règles Nielsen DCR, avec la page source citée à chaque règle |
+| `core/data/…/tracking/nielsen/NielsenSdkGateway.kt` | Frontière avec le SDK + `LoggingNielsenSdkGateway` |
+| `core/data/…/tracking/inhouse/InHouseTracker.kt` | Tracker maison générique (garde la cause de la pause, heartbeat toutes les 10 s) |
+| `player/engine/…/tracking/PlayerEventTranslator.kt` | `onEvents` → snapshot, ticker 1 s, `release()` idempotent |
+| `app/…/di/AppContainer.kt` | Construit la liste des trackers (DI manuelle) et la passe à `PlayerFactory` |
+
+Debug : dans Logcat, filtrer sur `PlaybackTracking`. On y lit la timeline « callback Media3 → événement normalisé → appel SDK » :
+```
+onEvents[onPlaybackStateChanged(READY), onIsPlayingChanged(true)] → SessionStarted(...)
+      → Nielsen.play({channelName=Media3Sample, mediaURL=})
+      → Nielsen.loadMetadata({type=content, assetid=tears-widevine-ads, ...})
+onEvents[onPlaybackStateChanged(READY), onIsPlayingChanged(true)] → AdStarted(... kind=PREROLL ...)
+      → Nielsen.stop()
+      → Nielsen.loadMetadata({type=preroll, assetid=6359933237, ...})
+onEvents[onPositionDiscontinuity(AUTO_TRANSITION)] → AdBreakEnded(... PREROLL ..., resumesContent=true)
+      → Nielsen.stop()
+      → Nielsen.loadMetadata({type=content, ...})
+```
+(extrait réel : émulateur Pixel 10 Pro, contenu « Widevine + VMAP »)
+
+### 7.3 Tableau : callback Media3 → événement normalisé → appels Nielsen
+
+| Situation | Ce que lit le traducteur (Media3) | Événement normalisé | Appels Nielsen |
+|---|---|---|---|
+| Lancement | `onEvents` : `STATE_READY` et `playWhenReady = true` (premier READY) | `SessionStarted` | (flush si besoin) `play(channelInfo)`, `loadMetadata(type=content)` |
+| Lecture en cours | ticker 1 s sur `applicationLooper`, seulement si `isPlaying` | `Tick` | `setPlayheadPosition(s)` : position en s (VOD) ou heure UTC en s (live) |
+| Pause utilisateur | `onPlayWhenReadyChanged(false, USER_REQUEST)` | `Paused(USER)` | `setPlayheadPosition(final)` si nécessaire, puis `stop()` |
+| Appel, alarme | `playbackSuppressionReason = TRANSIENT_AUDIO_FOCUS_LOSS` (`playWhenReady` reste à true) | `Paused(INTERRUPTION)` | `stop()` |
+| Casque débranché | `onPlayWhenReadyChanged(false, AUDIO_BECOMING_NOISY)` | `Paused(AUDIO_BECOMING_NOISY)` | `stop()` |
+| Reprise | `playWhenReady = true` et plus de suppression | `Resumed` | `play()`, `loadMetadata(asset en cours : contenu OU pub)` |
+| Buffering | `STATE_BUFFERING`, `isPlaying = false` | aucun (les ticks s'arrêtent) | aucun appel ; le playhead est retenu |
+| Seek | `onPositionDiscontinuity(SEEK)` | `Seeked` | aucun (non documenté par Nielsen) |
+| Début d'un break | `isPlayingAd` passe à true / `currentAdGroupIndex` change | `AdBreakStarted`, `AdStarted` | `stop()`, `loadMetadata(type=preroll\|midroll\|postroll)` |
+| Pub suivante du break | `currentAdIndexInAdGroup` change (`AUTO_TRANSITION`) | `AdStarted` | `stop()`, `loadMetadata(pub)` |
+| Retour au contenu | `isPlayingAd` passe à false (`onPositionDiscontinuity(AUTO_TRANSITION)`) | `AdBreakEnded(resumesContent=true)` | `stop()`, `loadMetadata(content)` |
+| Fin du post-roll | `STATE_ENDED` alors qu'une pub est en cours | `AdBreakEnded(false)`, `Ended(COMPLETED)` | `setPlayheadPosition(final)`, `end()` |
+| Fin du contenu | `STATE_ENDED` | `Ended(COMPLETED)` | `end()` |
+| Média suivant (playlist) | `onMediaItemTransition(AUTO)` + `onPositionDiscontinuity(AUTO_TRANSITION)` dans **le même** `onEvents` | `ContentChanged` (un seul) | flush : `end()`, puis `play()`, `loadMetadata(content)` |
+| Repeat | `onMediaItemTransition(REPEAT)` | `Ended(COMPLETED)` + `SessionStarted` | `end()`, `play()`, `loadMetadata` |
+| Erreur fatale (ex : licence 401) | `EVENT_PLAYER_ERROR`, puis `STATE_IDLE` | `Ended(ERROR)` | `end()` |
+| `BEHIND_LIVE_WINDOW` | `EVENT_PLAYER_ERROR`, alors que le ViewModel a déjà relancé `prepare()` | `Ended(ERROR)`, puis `SessionStarted` au READY | `end()`, puis `play()`, `loadMetadata` |
+| `player.stop()` | `STATE_IDLE` sans erreur | `Ended(STOPPED)` | `end()` |
+| App en arrière-plan | `ON_STOP` → `ViewModel.onBackground()` → `pause()` | lifecycle + `Paused(USER)` | `appInBackground()`, `stop()` |
+| Retour au premier plan | `ON_START` | lifecycle | `appInForeground()` |
+| Sortie de l'écran | `onCleared()` → `PlayerSession.release()` | `Ended(RELEASED)`, `Released` | `end()`, une seule fois |
+| Fermeture de l'app | non branché | — | `close()` : non appelé (voir 7.4) |
+
+### 7.4 Décisions prises (à savoir défendre)
+- **Point d'entrée `onEvents`.** La doc Media3 garantit que les changements d'une même itération du Looper sont « reported together and only after all individual callbacks were triggered ». Je lis donc l'état consolidé. Les callbacks individuels ne servent qu'aux *raisons* (seek, repeat, cause de la pause).
+- **Démarrage au premier READY avec `playWhenReady`**, et non au `prepare()`. Le buffering initial n'est pas du visionnage, et à ce moment-là la durée et le statut live sont connus pour les métadonnées.
+- **Buffering ≠ pause.** La doc Nielsen **couvre** ce cas, contrairement à ce que je pensais au départ. FAQ : « For brief buffering […] do not call stop right away. Instead, stop sending the playheadPosition ». Interruption Scenarios : « Call `stop` immediately (except when content is buffering) ». Il n'y a pas d'événement : les ticks s'arrêtent d'eux-mêmes, car `isPlaying` passe à false.
+- **Suppression (focus audio transitoire) = `Paused(INTERRUPTION)`**, distincte d'une pause utilisateur. Nielsen fait `stop()` dans les deux cas (« Call stop as soon as a SIM or Skype / Hangout call is observed »). Le tracker maison conserve la cause. Le `SCRUBBING` n'est pas une interruption.
+- **Repeat = fin + nouvelle session.** Chaque boucle est un visionnage complet.
+- **Erreur = `end()`, pas `stop()`.** Après une erreur fatale, on ne sait pas si l'utilisateur va réessayer ; « Réessayer » ouvre une nouvelle session. L'alternative `stop()` se défendrait (Nielsen traite la perte réseau comme une interruption), mais elle laisserait une session ouverte indéfiniment.
+- **`ON_STOP` = suspension (`stop()`), pas fin.** Interruption Scenarios : « Call stop as soon as the app goes to background ». La fin (`end()`) a lieu au `release()`.
+- **`close()` non branché.** Android n'a aucun signal fiable de fermeture de l'app (`Application.onTerminate` n'est jamais appelé sur un vrai appareil), et fermer le SDK à la fin d'une activité le désactiverait pour le reste du process. `NielsenTracker.onAppClose()` existe et il est testé.
+- **Le flush Nielsen**, à un seul endroit (`NielsenTracker.flushPreviousSession`) : avant chaque `play()` de session, s'il reste une session ouverte, on appelle `end()` si le contenu change, ou `stop()` si c'est le même contenu et que le SDK est en PROCESSING. C'est aussi le vrai chemin du changement de contenu.
+- **`stop()` uniquement en PROCESSING.** Jamais de `stop()` « par précaution » sur un SDK IDLE (FAQ : « do not call stop and play APIs in that sequence. Always call play first and then call stop »).
+
+### 7.5 Vérifié par test, sur appareil, ou par la doc seule
+| Point | Statut |
+|---|---|
+| State machine : démarrage, pause/reprise, seek (y compris pendant le buffering et vers la fin), fin, changement de contenu, repeat, bascules pub, interruption, erreur, BEHIND_LIVE_WINDOW, release idempotent | **Test JVM** (`PlaybackSessionStateMachineTest`, 22 tests) |
+| Contrat commun (pas d'appel hors session, pas de double fin, ordre, robustesse sur 500 appels aléatoires) | **Test JVM** (`PlaybackTrackerContractTest`, exécuté par Nielsen et par le tracker maison). Un test de mutation confirme qu'il détecte un double `end()` |
+| Règles Nielsen (stop/loadMetadata autour des pubs, flush, playhead live en UTC, pas de stop en IDLE…) | **Test JVM** (`NielsenTrackerTest`, 16 tests) |
+| Séquence réelle avec ExoPlayer : contenu seul, pause + seek + reprise, release, `stop()`, **pre + mid + post-roll**, playlist (un seul `ContentChanged`), repeat | **Test Robolectric** (`PlayerEventTranslatorTest` : vrai ExoPlayer, `FakeClock`, `FakeMediaSource` + `AdPlaybackState`) |
+| Pubs via le vrai `AdsMediaSource` + `VmapAdsLoader`, arrière-plan/premier plan, release, erreur DRM 401 | **Sur appareil seulement** (émulateur, Logcat `PlaybackTracking`) ; pas de test automatisé |
+| Perte réelle du focus audio (appel), casque débranché | **Doc Media3 + test JVM de la state machine** ; non provoqué sur appareil |
+| `BEHIND_LIVE_WINDOW` | **Test JVM** uniquement (aucun contenu live dans le catalogue) |
+| Comportement du SDK Nielsen réel | **Doc seule** : SDK non inclus |
+| Place de `end()` après un post-roll ; seek ; `end()` sur un SDK IDLE | **Non documenté** dans les pages Nielsen consultées : choix signalés dans `NielsenTracker` |
+
+Pièges découverts pendant les tests :
+- `onEvents` est livré à l'itération **suivante** du Looper : `untilState(STATE_ENDED)` rend la main avant le dernier événement normalisé. Il faut d'abord vider la file (`untilPendingCommandsAreFullyHandled`).
+- Robolectric 4.16 (tiré par media3-test-utils-robolectric 1.11.1) s'arrête à l'API 36, alors que le projet cible l'API 37. Solution : `src/test/resources/robolectric.properties` avec `sdk=36`.
+- Le contenu « licence invalide » **joue quelques secondes** avant l'erreur. Tears of Steel commence par une partie en clair, et le 401 n'est d'abord qu'un `onDrmSessionManagerError` non fatal. L'erreur fatale arrive à la fin de cette partie (≈ 10 s) : la session démarre donc bien, puis elle se termine en `ERROR`.
+
+### 7.6 Sources
+- Media3 : [Listening to player events (`onEvents`)](https://developer.android.com/media/media3/exoplayer/listening-to-player-events) · [Threading](https://developer.android.com/media/media3/exoplayer/hello-world#a-note-on-threading) · [Ad insertion](https://developer.android.com/media/media3/exoplayer/ad-insertion) · sources de `Player.java` 1.11.1 (constantes `PLAYBACK_SUPPRESSION_REASON_*`, `PLAY_WHEN_READY_CHANGE_REASON_*`, `MEDIA_ITEM_TRANSITION_REASON_*`)
+- Nielsen Engineering Portal : [DCR Video Android SDK](https://engineeringportal.nielsen.com/wiki/DCR_Video_Android_SDK) · [Android SDK API Reference](https://engineeringportal.nielsen.com/wiki/Android_SDK_API_Reference) · [Digital Measurement FAQ](https://engineeringportal.nielsen.com/wiki/Digital_Measurement_FAQ) · [Interruption Scenarios](https://engineeringportal.nielsen.com/wiki/Digital_Measurement_Interruption_Scenarios) · [play()](https://engineeringportal.nielsen.com/wiki/play()) · [loadMetadata()](https://engineeringportal.nielsen.com/wiki/loadMetadata()) · [iOS SDK API Reference](https://engineeringportal.nielsen.com/wiki/iOS_SDK_API_Reference) (les états IDLE/PROCESSING sont décrits sur la page iOS, pas sur la page Android consultée)
+
+### 7.7 Récit STAR : le flush Nielsen chez Bedrock (à compléter)
+- **Situation** : chez Bedrock Streaming, dans l'équipe Player & Ads, j'ai constaté que `______` (symptôme : quel écart de mesure, sur quelle app et quelle plateforme, signalé par qui ?).
+- **Tâche** : je devais trouver pourquoi `______`, et garantir qu'une session Nielsen était toujours fermée avant qu'une nouvelle s'ouvre.
+- **Action** : j'ai analysé `______` (logs, Charles Proxy ?) et j'ai trouvé que la cause réelle était `______`. J'ai alors centralisé la fermeture de l'ancienne session dans `______`.
+- **Résultat** : `______` (effet mesuré, validation par Nielsen ou par la QA ?).
+- **Ce que j'en retiens** : un seul endroit pour le flush, `end()` si le contenu change, `stop()` sinon, et des tests de contrat pour que ça ne régresse pas. C'est ce que j'ai reproduit dans ce sample.

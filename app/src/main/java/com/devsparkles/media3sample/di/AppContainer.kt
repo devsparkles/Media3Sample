@@ -7,7 +7,11 @@ import com.devsparkles.media3sample.core.data.ads.AdRepositoryImpl
 import com.devsparkles.media3sample.core.data.ads.HttpAdTracker
 import com.devsparkles.media3sample.core.data.content.FakeContentRepository
 import com.devsparkles.media3sample.core.data.network.UrlConnectionHttpClient
+import com.devsparkles.media3sample.core.data.tracking.inhouse.InHouseTracker
+import com.devsparkles.media3sample.core.data.tracking.nielsen.LoggingNielsenSdkGateway
+import com.devsparkles.media3sample.core.data.tracking.nielsen.NielsenTracker
 import com.devsparkles.media3sample.core.domain.repository.AdTracker
+import com.devsparkles.media3sample.core.domain.tracking.PlaybackTracker
 import com.devsparkles.media3sample.core.domain.usecase.GetCatalogUseCase
 import com.devsparkles.media3sample.core.domain.usecase.GetPlayableContentUseCase
 import com.devsparkles.media3sample.core.domain.usecase.LoadAdScheduleUseCase
@@ -48,10 +52,35 @@ class AppContainer(context: Context) {
 
     val getPlayableContent = GetPlayableContentUseCase(contentRepository)
 
+    /**
+     * Mesure d'audience : la liste des outils branchés sur le player.
+     * Ajouter un outil = une ligne ici. Les instances vivent aussi longtemps que l'app (un SDK
+     * Nielsen par process), et sont partagées par les players successifs.
+     *
+     * Nielsen : ⚠️ SDK RÉEL NON INCLUS. LoggingNielsenSdkGateway journalise chaque appel :
+     *  - tag « Nielsen » pour les seuls appels SDK ;
+     *  - tag « PlaybackTracking », indenté, pour les intercaler dans la timeline du traducteur.
+     * En prod : un gateway qui délègue à `AppSdk` (appid fourni par Nielsen).
+     *
+     * onAppClose() / close() n'est volontairement PAS branché : Android ne donne aucun signal
+     * fiable de « fermeture de l'app » (Application.onTerminate n'est jamais appelé sur un vrai
+     * appareil), et fermer le SDK sur la fin d'une activité le tuerait pour le reste du process.
+     */
+    private val playbackTrackers: List<PlaybackTracker> = listOf(
+        NielsenTracker(
+            LoggingNielsenSdkGateway { call ->
+                Log.d("Nielsen", call)
+                Log.d(PlayerFactory.TRACKING_TAG, "      → Nielsen.$call")
+            },
+        ),
+        InHouseTracker(send = { beacon -> Log.d("InHouseTracker", beacon.toString()) }),
+    )
+
     val playerFactory = PlayerFactory(
         context = appContext,
         loadAdSchedule = LoadAdScheduleUseCase(adRepository),
         adTracker = adTracker,
         userAgent = userAgent,
+        playbackTrackers = playbackTrackers,
     )
 }

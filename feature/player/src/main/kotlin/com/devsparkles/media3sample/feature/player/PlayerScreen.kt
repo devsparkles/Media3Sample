@@ -56,6 +56,7 @@ fun PlayerScreen(viewModel: PlayerViewModel, modifier: Modifier = Modifier) {
     // ON_STOP (et pas ON_PAUSE) : en multi-fenêtre / PiP l'activité est "paused" mais visible,
     // la vidéo doit continuer. https://developer.android.com/media/media3/exoplayer/hello-world
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onBackground() }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) { viewModel.onForeground() }
 
     Box(modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(

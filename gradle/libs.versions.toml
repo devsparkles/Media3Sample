@@ -33,6 +33,11 @@ androidx-media3-exoplayer = { module = "androidx.media3:media3-exoplayer", versi
 androidx-media3-exoplayer-dash = { module = "androidx.media3:media3-exoplayer-dash", version.ref = "media3Exoplayer" }
 androidx-media3-ui = { module = "androidx.media3:media3-ui", version.ref = "media3Exoplayer" }
 androidx-media3-ui-compose-material3 = { module = "androidx.media3:media3-ui-compose-material3", version.ref = "media3Exoplayer" }
+# Tests : TestExoPlayerBuilder, FakeClock, FakeMediaSource, FakeTimeline (media3-test-utils)
+# et TestPlayerRunHelper (media3-test-utils-robolectric, qui tire Robolectric 4.16 en 1.11.1).
+# Même version que le reste de Media3, obligatoirement.
+androidx-media3-test-utils = { module = "androidx.media3:media3-test-utils", version.ref = "media3Exoplayer" }
+androidx-media3-test-utils-robolectric = { module = "androidx.media3:media3-test-utils-robolectric", version.ref = "media3Exoplayer" }
 
 # --- Coroutines ---------------------------------------------------------------------
 # Doc : https://kotlinlang.org/docs/coroutines-guide.html

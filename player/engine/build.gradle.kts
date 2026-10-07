@@ -18,6 +18,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+    // Robolectric : les tests JVM qui instancient un vrai ExoPlayer ont besoin des ressources
+    // Android simulées. https://developer.android.com/training/testing/local-tests/robolectric
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -32,4 +37,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
+    // Test du PlayerEventTranslator avec un VRAI ExoPlayer (TestExoPlayerBuilder + FakeClock),
+    // exécuté sous Robolectric (Looper Android simulé, sans émulateur).
+    testImplementation(libs.androidx.media3.test.utils)
+    testImplementation(libs.androidx.media3.test.utils.robolectric)
+    testImplementation(libs.androidx.junit)
 }
