@@ -34,6 +34,7 @@ dependencies {
     // DASH : il suffit que le module soit dans le classpath. DefaultMediaSourceFactory le
     // détecte par réflexion et crée une DashMediaSource quand mimeType = application/dash+xml.
     implementation(libs.androidx.media3.exoplayer.dash)
+    api(libs.androidx.media3.cast)
     implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
