@@ -193,7 +193,7 @@ class PlaybackSessionStateMachineTest {
     fun `content change emits a single ContentChanged`() {
         start()
         val events = machine.onSnapshot(snapshot(content = episode))
-        assertEquals(listOf(ContentChanged(movie, episode, 0)), events)
+        assertEquals(listOf(ContentChanged(movie, episode, 0, exitPlayhead = Playhead(0, false, false, 0))), events)
         assertEquals(emptyList<PlaybackEvent>(), machine.onSnapshot(snapshot(content = episode)))
     }
 
@@ -211,8 +211,30 @@ class PlaybackSessionStateMachineTest {
     fun `pre-roll with two ads then content`() {
         val first = machine.onSnapshot(snapshot(ad = ad(preRoll, 0)))
         assertEquals(listOf(SessionStarted(movie, 0), AdBreakStarted(preRoll), AdStarted(ad(preRoll, 0))), first)
-        assertEquals(listOf(AdStarted(ad(preRoll, 1))), machine.onSnapshot(snapshot(ad = ad(preRoll, 1))))
-        assertEquals(listOf(AdBreakEnded(preRoll, resumesContent = true)), machine.onSnapshot(snapshot()))
+        // Sans position exacte de Media3, l'exitPlayhead est le dernier playhead observé dans l'asset quitté.
+        val adExit = Playhead(0, isAd = true, isLive = false, unixTimeMs = 0)
+        assertEquals(listOf(AdStarted(ad(preRoll, 1), adExit)), machine.onSnapshot(snapshot(ad = ad(preRoll, 1))))
+        assertEquals(listOf(AdBreakEnded(preRoll, resumesContent = true, adExit)), machine.onSnapshot(snapshot()))
+    }
+
+    @Test
+    fun `transitions carry the exact exit position given by Media3`() {
+        val midRoll = TrackedAdBreak(groupIndex = 1, kind = AdBreakKind.MIDROLL, adCount = 1)
+        val mid = TrackedAd(midRoll, 0, id = "mid", durationMs = 5_000)
+        start()
+        machine.onTick(snapshot(positionMs = 24_000))
+        // Content -> pub : position du contenu au point de coupure (et non le dernier tick, 24 s).
+        val toAd = machine.onSnapshot(snapshot(ad = mid), SnapshotHints(exitPositionMs = 25_300)).ofType<AdStarted>().single()
+        assertEquals(Playhead(25_300, isAd = false, isLive = false, unixTimeMs = 0), toAd.exitPlayhead)
+        // Pub -> contenu : position de fin de la pub.
+        val back = machine.onSnapshot(snapshot(positionMs = 25_300), SnapshotHints(exitPositionMs = 5_000)).ofType<AdBreakEnded>().single()
+        assertEquals(Playhead(5_000, isAd = true, isLive = false, unixTimeMs = 0), back.exitPlayhead)
+    }
+
+    @Test
+    fun `a pre-roll at session start has no content exit playhead`() {
+        val first = machine.onSnapshot(snapshot(ad = ad(preRoll, 0))).ofType<AdStarted>().single()
+        assertEquals(null, first.exitPlayhead)
     }
 
     @Test

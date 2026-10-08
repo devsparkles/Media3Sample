@@ -37,12 +37,13 @@ class CompositeTracker(
 
     // Surchargé pour déléguer à la version de CHAQUE tracker (Nielsen a la sienne),
     // et non à l'implémentation par défaut de l'interface.
-    override fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long) =
-        forEachIsolated { onContentChange(previous, next, positionMs) }
+    override fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long, exitPlayhead: Playhead?) =
+        forEachIsolated { onContentChange(previous, next, positionMs, exitPlayhead) }
 
     override fun onAdBreakStart(adBreak: TrackedAdBreak) = forEachIsolated { onAdBreakStart(adBreak) }
-    override fun onAdStart(ad: TrackedAd) = forEachIsolated { onAdStart(ad) }
-    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean) = forEachIsolated { onAdBreakEnd(adBreak, resumesContent) }
+    override fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead?) = forEachIsolated { onAdStart(ad, exitPlayhead) }
+    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead?) =
+        forEachIsolated { onAdBreakEnd(adBreak, resumesContent, exitPlayhead) }
     override fun onSessionEnd(reason: SessionEndReason, finalPlayhead: Playhead?) = forEachIsolated { onSessionEnd(reason, finalPlayhead) }
     override fun onPlayheadTick(playhead: Playhead) = forEachIsolated { onPlayheadTick(playhead) }
     override fun onAppBackground() = forEachIsolated { onAppBackground() }

@@ -59,6 +59,7 @@ import com.devsparkles.media3sample.core.domain.tracking.TrackedContent
  * @param clock horloge Media3 : `Clock.DEFAULT` en prod, `FakeClock` en test (ticker déterministe)
  * @param adIdProvider identifiant VAST de la pub (groupe, index) ; null -> identifiant de repli
  * @param log timeline de debug (« callback Media3 → événement normalisé »), null = pas de log
+ * @param isTechnical items à NE PAS mesurer (vidéo « one pixel » de démarrage...) : voir [TechnicalMediaItem]
  * @param sink reçoit chaque événement normalisé (en prod : dispatch vers le CompositeTracker)
  */
 @OptIn(UnstableApi::class)
@@ -68,6 +69,7 @@ class PlayerEventTranslator(
     private val adIdProvider: (adGroupIndex: Int, adIndexInAdGroup: Int) -> String? = { _, _ -> null },
     private val log: ((String) -> Unit)? = null,
     private val tickIntervalMs: Long = 1_000,
+    private val isTechnical: (MediaItem) -> Boolean = TechnicalMediaItem::isTechnical,
     private val sink: (PlaybackEvent) -> Unit,
 ) : Player.Listener {
 
@@ -83,6 +85,7 @@ class PlayerEventTranslator(
     private var pendingSeek: SnapshotHints.Seek? = null
     private var pendingRepeat = false
     private var pendingPauseReason: PauseReason? = null
+    private var pendingExitPositionMs: Long? = null
     private val pendingCallbacks = mutableListOf<String>()
 
     init {
@@ -96,6 +99,15 @@ class PlayerEventTranslator(
         if (reason == Player.DISCONTINUITY_REASON_SEEK) {
             // Plusieurs seeks dans la même itération : on garde le point de départ du premier.
             pendingSeek = SnapshotHints.Seek(pendingSeek?.fromMs ?: oldPosition.contentPositionMs, newPosition.contentPositionMs)
+        } else if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION ||
+            reason == Player.DISCONTINUITY_REASON_SKIP ||
+            reason == Player.DISCONTINUITY_REASON_REMOVE
+        ) {
+            // Passage d'un asset à l'autre (contenu <-> pub, pub -> pub, média suivant) :
+            // oldPosition.positionMs = position EXACTE dans l'asset quitté (dans la pub si c'en
+            // était une). C'est le « dernier playhead » à envoyer avant stop()/end().
+            // On garde la première de l'itération : c'est l'asset réellement quitté.
+            if (pendingExitPositionMs == null) pendingExitPositionMs = oldPosition.positionMs
         }
     }
 
@@ -134,11 +146,13 @@ class PlayerEventTranslator(
             seek = pendingSeek,
             repeated = pendingRepeat,
             pauseReason = pendingPauseReason,
+            exitPositionMs = pendingExitPositionMs,
         )
         val trigger = "onEvents[${pendingCallbacks.joinToString()}]"
         pendingSeek = null
         pendingRepeat = false
         pendingPauseReason = null
+        pendingExitPositionMs = null
         pendingCallbacks.clear()
 
         emit(trigger, machine.onSnapshot(snapshot(), hints))
@@ -197,7 +211,8 @@ class PlayerEventTranslator(
         val isPlayingAd = player.isPlayingAd
         val isLive = player.isCurrentMediaItemLive
         return PlayerSnapshot(
-            content = player.currentMediaItem?.let { contentOf(it, isLive) },
+            // Un item technique est invisible pour la mesure : pas de session dessus.
+            content = player.currentMediaItem?.takeUnless(isTechnical)?.let { contentOf(it, isLive) },
             status = statusOf(player.playbackState),
             playWhenReady = player.playWhenReady,
             isPlaying = player.isPlaying,

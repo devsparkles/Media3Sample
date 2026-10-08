@@ -77,6 +77,17 @@ class PlayerEventTranslatorTest {
         return FakeMediaSource(FakeTimeline(window), ExoPlayerTestRunner.VIDEO_FORMAT, ExoPlayerTestRunner.AUDIO_FORMAT)
     }
 
+    /** Le « one pixel » : un item technique très court, marqué comme tel. */
+    private fun onePixel(durationMs: Long = 500): FakeMediaSource {
+        val window = FakeTimeline.TimelineWindowDefinition.Builder()
+            .setUid("one-pixel")
+            .setDurationUs(durationMs * 1_000)
+            .setWindowPositionInFirstPeriodUs(0)
+            .setMediaItem(TechnicalMediaItem.create("asset:///one_pixel.mp4", mediaId = "one-pixel"))
+            .build()
+        return FakeMediaSource(FakeTimeline(window), ExoPlayerTestRunner.VIDEO_FORMAT, ExoPlayerTestRunner.AUDIO_FORMAT)
+    }
+
     /** Forme compacte et stable des événements (sans les ticks). */
     private fun labels(): List<String> = events.mapNotNull { event ->
         when (event) {
@@ -196,6 +207,26 @@ class PlayerEventTranslatorTest {
         assertTrue(ticks().any { !it.playhead.isAd })
     }
 
+    /**
+     * Le « dernier playhead » de chaque asset quitté vient de oldPosition (onPositionDiscontinuity),
+     * pas du dernier tick : au mid-roll, c'est la position EXACTE du point de coupure (5 s).
+     */
+    @Test
+    fun `transitions carry the exact exit position of the asset being left`() {
+        val ads = FakeTimeline.createAdPlaybackState(/* adsPerAdGroup= */ 1, 5_000_000L)
+        prepareAndPlay(source("movie", durationMs = 10_000, ads = ads))
+        playUntilEndedAndSettle()
+
+        val toAd = events.filterIsInstance<PlaybackEvent.AdStarted>().single().exitPlayhead!!
+        assertEquals(false, toAd.isAd)
+        assertEquals(5_000L, toAd.positionMs)
+
+        val back = events.filterIsInstance<PlaybackEvent.AdBreakEnded>().single()
+        val adExit = back.exitPlayhead!!
+        assertTrue(adExit.isAd)
+        assertTrue("sortie de pub=${adExit.positionMs}", adExit.positionMs > 0)
+    }
+
     @Test
     fun `playlist transition emits a single ContentChanged`() {
         prepareAndPlay(source("first", durationMs = 3_000), source("second", durationMs = 3_000))
@@ -216,5 +247,31 @@ class PlayerEventTranslatorTest {
             listOf("SessionStarted(movie)", "Ended(COMPLETED)", "SessionStarted(movie)", "Paused(USER)"),
             labels(),
         )
+    }
+
+    // --- Bug du « one pixel » ----------------------------------------------------------------------
+
+    /** Reproduit le bug : sans marquage, l'item technique ouvre une session et pollue la mesure. */
+    @Test
+    fun `one pixel bug - an unmarked technical item opens a ghost session`() {
+        translator.release()
+        events.clear()
+        translator = PlayerEventTranslator(player, clock = clock, isTechnical = { false }, sink = { events += it })
+        prepareAndPlay(onePixel(), source("movie", durationMs = 3_000))
+        playUntilEndedAndSettle()
+
+        // Nielsen aurait reçu : play/loadMetadata(one-pixel), puis end, play, loadMetadata(movie).
+        assertEquals(listOf("SessionStarted(one-pixel)", "ContentChanged(one-pixel->movie)", "Ended(COMPLETED)"), labels())
+    }
+
+    @Test
+    fun `one pixel fix - a technical item is invisible, the session starts on the real content`() {
+        prepareAndPlay(onePixel(), source("movie", durationMs = 3_000))
+        playUntilEndedAndSettle()
+
+        assertEquals(listOf("SessionStarted(movie)", "Ended(COMPLETED)"), labels())
+        // Position dans le PROGRAMME (quelques ms observées), sans les 500 ms du one pixel.
+        val start = events.filterIsInstance<PlaybackEvent.SessionStarted>().single().positionMs
+        assertTrue("position de départ=$start", start < 100)
     }
 }

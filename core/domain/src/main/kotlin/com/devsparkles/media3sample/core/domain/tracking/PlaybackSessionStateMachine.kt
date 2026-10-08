@@ -47,12 +47,17 @@ data class PlayerSnapshot(
  * @property seek saut demandé par l'utilisateur ou le code (DISCONTINUITY_REASON_SEEK)
  * @property repeated le média a redémarré en mode repeat (MEDIA_ITEM_TRANSITION_REASON_REPEAT)
  * @property pauseReason raison du passage de playWhenReady à false
+ * @property exitPositionMs position EXACTE dans l'asset quitté lors d'une transition
+ *           (contenu -> pub, pub -> pub, pub -> contenu, média suivant) : `oldPosition.positionMs`
+ *           d'une discontinuité AUTO_TRANSITION / SKIP / REMOVE. Plus précis que le dernier tick
+ *           (jusqu'à 1 s de retard) : c'est le « dernier playhead » que Nielsen exige avant stop().
  */
 data class SnapshotHints(
     val errorOccurred: Boolean = false,
     val seek: Seek? = null,
     val repeated: Boolean = false,
     val pauseReason: PauseReason? = null,
+    val exitPositionMs: Long? = null,
 ) {
     data class Seek(val fromMs: Long, val toMs: Long)
 }
@@ -87,6 +92,9 @@ data class SnapshotHints(
  *  - ERREUR : fin de session (ERROR). Un `prepare()` (bouton Réessayer, recalage
  *    BEHIND_LIVE_WINDOW) ouvrira une NOUVELLE session au prochain READY.
  *  - FIN : au plus une fois par session, quel que soit le chemin (ENDED, erreur, release...).
+ *  - TRANSITION ENTRE ASSETS : chaque événement de transition porte `exitPlayhead`, la dernière
+ *    position de l'asset quitté (règle Nielsen « final playhead before stop, end or
+ *    loadMetadata »). Source : [SnapshotHints.exitPositionMs], sinon le dernier playhead observé.
  */
 class PlaybackSessionStateMachine {
 
@@ -113,10 +121,11 @@ class PlaybackSessionStateMachine {
         val current = session
         val content = snapshot.content
         if (current != null && content != null && content.id != current.id) {
-            closeAdBreak(resumesContent = false, events)
+            val contentExit = if (currentAd == null) exitPlayhead(leavingAd = false, snapshot, hints) else null
+            closeAdBreak(resumesContent = false, events, exitPlayhead(leavingAd = true, snapshot, hints))
             session = content
             paused = false
-            events += PlaybackEvent.ContentChanged(current, content, snapshot.contentPositionMs)
+            events += PlaybackEvent.ContentChanged(current, content, snapshot.contentPositionMs, contentExit)
         } else if (current != null && hints.repeated) {
             closeSession(SessionEndReason.COMPLETED, events)
         }
@@ -145,7 +154,7 @@ class PlaybackSessionStateMachine {
         hints.seek?.let { events += PlaybackEvent.Seeked(it.fromMs, it.toMs) }
 
         // 6. Bascules contenu <-> pub.
-        updateAds(snapshot.ad, events)
+        updateAds(snapshot, hints, events)
 
         // 7. Pause / reprise.
         val wantsToPlay = snapshot.playWhenReady &&
@@ -182,27 +191,49 @@ class PlaybackSessionStateMachine {
         return events
     }
 
-    private fun updateAds(ad: TrackedAd?, events: MutableList<PlaybackEvent>) {
+    private fun updateAds(snapshot: PlayerSnapshot, hints: SnapshotHints, events: MutableList<PlaybackEvent>) {
+        val ad = snapshot.ad
         if (ad == null) {
-            closeAdBreak(resumesContent = true, events)
+            closeAdBreak(resumesContent = true, events, exitPlayhead(leavingAd = true, snapshot, hints))
             return
         }
         if (currentBreak?.groupIndex != ad.adBreak.groupIndex) {
-            closeAdBreak(resumesContent = true, events) // break précédent sans retour au contenu (rare)
+            // break précédent sans retour au contenu (rare)
+            closeAdBreak(resumesContent = true, events, exitPlayhead(leavingAd = true, snapshot, hints))
             currentBreak = ad.adBreak
             events += PlaybackEvent.AdBreakStarted(ad.adBreak)
         }
         if (currentAd?.indexInBreak != ad.indexInBreak) {
+            // On quitte la pub précédente du break, ou le contenu pour la première pub.
+            val exit = exitPlayhead(leavingAd = currentAd != null, snapshot, hints)
             currentAd = ad
-            events += PlaybackEvent.AdStarted(ad)
+            events += PlaybackEvent.AdStarted(ad, exit)
         }
     }
 
-    private fun closeAdBreak(resumesContent: Boolean, events: MutableList<PlaybackEvent>) {
+    private fun closeAdBreak(resumesContent: Boolean, events: MutableList<PlaybackEvent>, exitPlayhead: Playhead? = null) {
         val adBreak = currentBreak ?: return
         currentBreak = null
         currentAd = null
-        events += PlaybackEvent.AdBreakEnded(adBreak, resumesContent)
+        events += PlaybackEvent.AdBreakEnded(adBreak, resumesContent, exitPlayhead)
+    }
+
+    /**
+     * Dernière position de l'asset qu'on quitte (pub si [leavingAd], contenu sinon).
+     *  1. la position exacte fournie par la discontinuité Media3 ([SnapshotHints.exitPositionMs]) ;
+     *  2. sinon le dernier playhead observé, s'il concerne bien ce type d'asset ;
+     *  3. sinon null (ex : pre-roll au tout début de la session, aucun contenu n'a été lu).
+     */
+    private fun exitPlayhead(leavingAd: Boolean, snapshot: PlayerSnapshot, hints: SnapshotHints): Playhead? {
+        val last = lastPlayhead?.takeIf { it.isAd == leavingAd }
+        val exitMs = hints.exitPositionMs ?: return last
+        if (last == null && session == null) return null
+        return Playhead(
+            positionMs = exitMs,
+            isAd = leavingAd,
+            isLive = last?.isLive ?: snapshot.playhead.isLive,
+            unixTimeMs = snapshot.playhead.unixTimeMs,
+        )
     }
 
     /** LE seul endroit qui émet [PlaybackEvent.Ended] : garantit « au plus une fin par session ». */
