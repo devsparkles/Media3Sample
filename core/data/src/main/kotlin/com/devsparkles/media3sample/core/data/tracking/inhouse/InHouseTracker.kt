@@ -68,9 +68,9 @@ class InHouseTracker(
     override fun onAdBreakStart(adBreak: TrackedAdBreak) =
         emit("ad_break_start", mapOf("kind" to adBreak.kind.name, "adCount" to adBreak.adCount))
 
-    override fun onAdStart(ad: TrackedAd) = emit("ad_start", mapOf("adId" to ad.id, "index" to ad.indexInBreak))
+    override fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead?) = emit("ad_start", mapOf("adId" to ad.id, "index" to ad.indexInBreak))
 
-    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean) =
+    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead?) =
         emit("ad_break_end", mapOf("kind" to adBreak.kind.name))
 
     override fun onSessionEnd(reason: SessionEndReason, finalPlayhead: Playhead?) {

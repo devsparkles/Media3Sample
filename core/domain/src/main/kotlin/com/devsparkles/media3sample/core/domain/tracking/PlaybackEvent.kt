@@ -14,10 +14,20 @@ sealed interface PlaybackEvent {
     data class Paused(val reason: PauseReason, val playhead: Playhead) : PlaybackEvent
     data class Resumed(val playhead: Playhead) : PlaybackEvent
     data class Seeked(val fromMs: Long, val toMs: Long) : PlaybackEvent
-    data class ContentChanged(val previous: TrackedContent, val next: TrackedContent, val positionMs: Long) : PlaybackEvent
+    /*
+     * `exitPlayhead` (transitions entre assets) : dernière position de l'asset QU'ON QUITTE
+     * (le contenu avant une pub, la pub avant la suivante ou avant le retour au contenu).
+     * Nielsen l'exige avant stop/end/loadMetadata ; null si inconnue.
+     */
+    data class ContentChanged(
+        val previous: TrackedContent,
+        val next: TrackedContent,
+        val positionMs: Long,
+        val exitPlayhead: Playhead? = null,
+    ) : PlaybackEvent
     data class AdBreakStarted(val adBreak: TrackedAdBreak) : PlaybackEvent
-    data class AdStarted(val ad: TrackedAd) : PlaybackEvent
-    data class AdBreakEnded(val adBreak: TrackedAdBreak, val resumesContent: Boolean) : PlaybackEvent
+    data class AdStarted(val ad: TrackedAd, val exitPlayhead: Playhead? = null) : PlaybackEvent
+    data class AdBreakEnded(val adBreak: TrackedAdBreak, val resumesContent: Boolean, val exitPlayhead: Playhead? = null) : PlaybackEvent
     data class Ended(val reason: SessionEndReason, val finalPlayhead: Playhead?) : PlaybackEvent
 
     /** Le player est libéré : plus aucun événement après celui-ci. */
@@ -35,10 +45,10 @@ fun PlaybackEvent.dispatchTo(tracker: PlaybackTracker) {
         is PlaybackEvent.Paused -> tracker.onPause(reason, playhead)
         is PlaybackEvent.Resumed -> tracker.onResume(playhead)
         is PlaybackEvent.Seeked -> tracker.onSeek(fromMs, toMs)
-        is PlaybackEvent.ContentChanged -> tracker.onContentChange(previous, next, positionMs)
+        is PlaybackEvent.ContentChanged -> tracker.onContentChange(previous, next, positionMs, exitPlayhead)
         is PlaybackEvent.AdBreakStarted -> tracker.onAdBreakStart(adBreak)
-        is PlaybackEvent.AdStarted -> tracker.onAdStart(ad)
-        is PlaybackEvent.AdBreakEnded -> tracker.onAdBreakEnd(adBreak, resumesContent)
+        is PlaybackEvent.AdStarted -> tracker.onAdStart(ad, exitPlayhead)
+        is PlaybackEvent.AdBreakEnded -> tracker.onAdBreakEnd(adBreak, resumesContent, exitPlayhead)
         is PlaybackEvent.Ended -> tracker.onSessionEnd(reason, finalPlayhead)
         is PlaybackEvent.Tick -> tracker.onPlayheadTick(playhead)
         // La fin de session a déjà été émise (Ended) juste avant : rien de plus pour les trackers.

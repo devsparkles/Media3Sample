@@ -92,6 +92,57 @@ class NielsenTrackerTest {
         assertEquals(listOf("stop", "loadMetadata(content)"), callsAfter { tracker.onAdBreakEnd(preRoll, resumesContent = true) })
     }
 
+    // --- Dernier playhead avant chaque transition [DCR] « final playhead [...] before stop, end or loadMetadata »
+
+    @Test
+    fun `content to mid-roll sends the content final playhead before stop`() {
+        val midRoll = TrackedAdBreak(1, AdBreakKind.MIDROLL, adCount = 1)
+        tracker.onSessionStart(movie, 0)
+        tracker.onPlayheadTick(playhead(24_000))
+        // Dernier tick à 24 s, coupure à 25,3 s : la position finale (25) part AVANT stop().
+        // Sans exitPlayhead, Nielsen n'aurait jamais reçu la dernière seconde du contenu.
+        assertEquals(
+            listOf("setPlayheadPosition(25)", "stop", "loadMetadata(midroll)"),
+            callsAfter { tracker.onAdStart(TrackedAd(midRoll, 0, "mid", 5_000), exitPlayhead = playhead(25_300)) },
+        )
+    }
+
+    @Test
+    fun `ad to ad and ad to content send the ad final playhead before stop`() {
+        tracker.onSessionStart(movie, 0)
+        tracker.onAdStart(ad(0))
+        tracker.onPlayheadTick(playhead(4_000, isAd = true))
+        assertEquals(
+            listOf("setPlayheadPosition(5)", "stop", "loadMetadata(preroll)"),
+            callsAfter { tracker.onAdStart(ad(1), exitPlayhead = playhead(5_000, isAd = true)) },
+        )
+        tracker.onPlayheadTick(playhead(4_000, isAd = true))
+        assertEquals(
+            listOf("setPlayheadPosition(5)", "stop", "loadMetadata(content)"),
+            callsAfter { tracker.onAdBreakEnd(preRoll, resumesContent = true, exitPlayhead = playhead(5_000, isAd = true)) },
+        )
+    }
+
+    @Test
+    fun `content resumes from where it stopped, not from 0, after the break`() {
+        tracker.onSessionStart(movie, 0)
+        tracker.onPlayheadTick(playhead(25_000))
+        tracker.onAdStart(TrackedAd(TrackedAdBreak(1, AdBreakKind.MIDROLL, 1), 0, "mid", 5_000), playhead(25_000))
+        tracker.onPlayheadTick(playhead(1_000, isAd = true))
+        tracker.onAdBreakEnd(TrackedAdBreak(1, AdBreakKind.MIDROLL, 1), resumesContent = true, playhead(5_000, isAd = true))
+        assertEquals(listOf("setPlayheadPosition(26)"), callsAfter { tracker.onPlayheadTick(playhead(26_000)) })
+    }
+
+    @Test
+    fun `content change sends the previous content final playhead before end`() {
+        tracker.onSessionStart(movie, 0)
+        tracker.onPlayheadTick(playhead(59_000))
+        assertEquals(
+            listOf("setPlayheadPosition(60)", "end", "play", "loadMetadata(content)"),
+            callsAfter { tracker.onContentChange(movie, episode, 0, exitPlayhead = playhead(60_000)) },
+        )
+    }
+
     @Test
     fun `ad and content metadata are never mixed`() {
         tracker.onSessionStart(movie, 0)

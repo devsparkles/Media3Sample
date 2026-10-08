@@ -70,11 +70,12 @@ class NielsenTracker(
      * Changement de contenu : on passe directement par [openSession], dont le flush appelle
      * end() sur l'ancien contenu (« end() : changement de contenu »).
      */
-    override fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long) = openSession(next)
+    override fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long, exitPlayhead: Playhead?) =
+        openSession(next, exitPlayhead)
 
-    private fun openSession(content: TrackedContent) {
+    private fun openSession(content: TrackedContent, exitPlayhead: Playhead? = null) {
         if (closed) return
-        flushPreviousSession(next = content)
+        flushPreviousSession(next = content, exitPlayhead)
         // [DCR] « play() : call at start of each new stream » puis « loadMetadata() needs to be
         // called at the beginning of each asset ». Jamais stop() puis play() pour démarrer :
         // stop() n'est appelé que dans le flush, et seulement si le SDK est en PROCESSING.
@@ -89,13 +90,14 @@ class NielsenTracker(
      *    be resumed from the same position ») ;
      *  - même contenu (session restée ouverte) -> stop() si le SDK est en PROCESSING.
      * Le cas normal (session déjà terminée par onSessionEnd) ne fait rien ici.
+     * Dans les deux cas, le dernier playhead de l'asset quitté part AVANT end()/stop() [DCR].
      */
-    private fun flushPreviousSession(next: TrackedContent) {
+    private fun flushPreviousSession(next: TrackedContent, exitPlayhead: Playhead?) {
         val previous = session ?: return
         if (previous.id != next.id) {
-            endSession(finalPlayhead = null)
+            endSession(exitPlayhead)
         } else if (sdkState == SdkState.PROCESSING) {
-            stopAsset(finalPlayhead = null)
+            stopAsset(exitPlayhead)
         }
     }
 
@@ -149,18 +151,25 @@ class NielsenTracker(
     /**
      * [FAQ] « Call stop() before starting an ad break. Call loadMetadata() to load ad. »
      * [DCR] « stop() : call [...] at the end of each Ad » -> même stop() entre deux pubs.
+     * [DCR] « The final playhead position must be sent for the current asset being played
+     * before calling stop, end or loadmetadata » -> [exitPlayhead] (position du contenu au point
+     * de coupure, ou fin de la pub précédente) part AVANT le stop().
      */
-    override fun onAdStart(ad: TrackedAd) {
+    override fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead?) {
         if (closed || session == null) return
-        stopAsset(finalPlayhead = null)
+        stopAsset(exitPlayhead)
         loadAsset(adMetadata(ad))
     }
 
-    /** [FAQ] « Once adbreak is complete, call stop and loadMetadata(content) ». */
-    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean) {
+    /**
+     * [FAQ] « Once adbreak is complete, call stop and loadMetadata(content) ». Le playhead du
+     * contenu reprend là où il s'était arrêté (Pre-Certification Checklist) : c'est la position
+     * du contenu que le prochain tick enverra, pas 0.
+     */
+    override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead?) {
         val content = session ?: return
         if (closed || !resumesContent) return // post-roll : end() arrive juste après (non documenté)
-        stopAsset(finalPlayhead = null)
+        stopAsset(exitPlayhead)
         loadAsset(contentMetadata(content))
     }
 

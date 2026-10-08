@@ -38,22 +38,29 @@ interface PlaybackTracker {
      * Le player est passé à un autre contenu (playlist) SANS interruption de session côté
      * utilisateur. Par défaut : fin de la session courante puis nouvelle session.
      * Un adapter peut surcharger (Nielsen : son « flush » s'en charge).
+     *
+     * @param exitPlayhead dernière position de [previous] (null si inconnue)
      */
-    fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long) {
-        onSessionEnd(SessionEndReason.CONTENT_CHANGED, finalPlayhead = null)
+    fun onContentChange(previous: TrackedContent, next: TrackedContent, positionMs: Long, exitPlayhead: Playhead? = null) {
+        onSessionEnd(SessionEndReason.CONTENT_CHANGED, finalPlayhead = exitPlayhead)
         onSessionStart(next, positionMs)
     }
 
     fun onAdBreakStart(adBreak: TrackedAdBreak)
 
-    /** Une pub du break commence (la première, puis chacune des suivantes). */
-    fun onAdStart(ad: TrackedAd)
+    /**
+     * Une pub du break commence (la première, puis chacune des suivantes).
+     * @param exitPlayhead dernière position de l'asset quitté : le contenu (première pub) ou la
+     *        pub précédente. Null si inconnue.
+     */
+    fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead? = null)
 
     /**
      * @param resumesContent false si le break est suivi de la fin de session (post-roll) :
      *        inutile alors de recharger les métadonnées du contenu.
+     * @param exitPlayhead dernière position dans la dernière pub du break (null si inconnue)
      */
-    fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean)
+    fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead? = null)
 
     /**
      * Fin de session. Appelé AU PLUS UNE FOIS par session par le cœur ; une implémentation

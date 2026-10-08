@@ -185,6 +185,12 @@ Le client aura le dossier sous les yeux, alors aligne-toi dessus ou explique l'�
   - Situation et tâche : `______`
   - Action : Strategy + tests par macro.
   - Résultat : `______`
+- **Deuxième histoire possible (mesure d'audience, ~45 s)**, détaillée dans `GUIDE_ENTRETIEN.md` §7.7 et visible dans le sample :
+  > « Le player avait plusieurs **reporters** d'audience, avec un jeu différent selon la marque : RTL et Videoland ne mesuraient pas avec les mêmes outils. Les événements du player étaient écoutés une seule fois, puis diffusés à chaque reporter, dont celui qui alimentait le **SDK Nielsen**.
+  > Le problème venait d'un **MediaItem technique**, une vidéo d'un pixel qu'on mettait en tête de playlist pour démarrer ExoPlayer quand il n'y avait pas de pub. Pour le reporter Nielsen, c'était un vrai contenu : il ouvrait une mesure dessus, et la transition vers le vrai programme cassait la séquence attendue par Nielsen.
+  > Nielsen impose un ordre strict : **dernier playhead, puis `stop` ou `end`, et seulement ensuite les métadonnées du nouvel asset**. J'ai dû **fermer proprement l'état précédent** avant d'ouvrir le suivant `______` (préciser le correctif exact). »
+  - Ce que ça montre : les états du player et ceux d'un SDK de mesure ne correspondent pas un à un. Il faut une machine d'état propre au reporter.
+  - ⚠️ Ne dis que ce dont tu es sûr : le correctif exact et la répartition des reporters par marque sont à confirmer.
 - **Résultat** : `______` (chiffres qui feraient mouche, à vérifier)
   - taux d'erreur pub en baisse ?
   - impressions récupérées ?

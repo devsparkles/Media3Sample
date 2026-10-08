@@ -16,8 +16,8 @@ class CompositeTrackerTest {
         override fun onResume(playhead: Playhead) { calls += "resume" }
         override fun onSeek(fromMs: Long, toMs: Long) { calls += "seek" }
         override fun onAdBreakStart(adBreak: TrackedAdBreak) { calls += "adBreakStart" }
-        override fun onAdStart(ad: TrackedAd) { calls += "adStart" }
-        override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean) { calls += "adBreakEnd" }
+        override fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead?) { calls += "adStart" }
+        override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead?) { calls += "adBreakEnd" }
         override fun onSessionEnd(reason: SessionEndReason, finalPlayhead: Playhead?) { calls += "end" }
         override fun onPlayheadTick(playhead: Playhead) { calls += "tick" }
         override fun onAppBackground() { calls += "background" }
@@ -32,8 +32,8 @@ class CompositeTrackerTest {
         override fun onResume(playhead: Playhead) = error("boom")
         override fun onSeek(fromMs: Long, toMs: Long) = error("boom")
         override fun onAdBreakStart(adBreak: TrackedAdBreak) = error("boom")
-        override fun onAdStart(ad: TrackedAd) = error("boom")
-        override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean) = error("boom")
+        override fun onAdStart(ad: TrackedAd, exitPlayhead: Playhead?) = error("boom")
+        override fun onAdBreakEnd(adBreak: TrackedAdBreak, resumesContent: Boolean, exitPlayhead: Playhead?) = error("boom")
         override fun onSessionEnd(reason: SessionEndReason, finalPlayhead: Playhead?) = error("boom")
         override fun onPlayheadTick(playhead: Playhead) = error("boom")
         override fun onAppBackground() = error("boom")
