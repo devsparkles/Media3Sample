@@ -1144,8 +1144,9 @@ attend d'un profil senior.
 ## Les autres documents du dépôt
 
 Tu as fini le parcours. Ces documents servent à **réviser** ou à **approfondir** :
+- `README.md` : le point d'entrée du dépôt (lancer, ordre de lecture, historique des PR, limites).
 - `GUIDE_ENTRETIEN.md` : les fiches de révision. Tableaux, questions/réponses, et en section 7 le
-  tableau complet « callback Media3 → événement → appel Nielsen ».
+  tableau complet « callback Media3 → événement → appel Nielsen ». Section 8 : Google Cast.
 - `GUIDE_MACROS_VAST.md` : les macros VAST confrontées à la spec officielle, et le récit de
   l'erreur d'IA corrigée.
 - `PRESENTATION_ORALE.md` : le pitch de ton parcours professionnel.
