@@ -2,10 +2,10 @@
 
 Ce projet est un player Media3/ExoPlayer **mobile** qui couvre les points de la fiche de poste :
 lecture **MPEG-DASH**, DRM **Widevine**, pubs **VMAP/VAST** (pre/mid/post-rolls, skip, tracking),
-**Clean Architecture** multi-modules, **coroutines**, **observabilité** et **tests**.
+**Clean Architecture** multi-modules, **coroutines**, **observabilité**, **Google Cast** et **tests**.
 
 > Lancer : `./gradlew test` (tests JVM, sans émulateur) puis exécuter `:app` depuis Android Studio.
-> Logcat : filtrer sur `PlaybackQoE`, `AdTracker`, `EventLogger`.
+> Logcat : filtrer sur `PlaybackQoE`, `AdTracker`, `EventLogger`, `PlaybackTracking`, `Cast`.
 
 ---
 
@@ -70,12 +70,14 @@ lecture **MPEG-DASH**, DRM **Widevine**, pubs **VMAP/VAST** (pre/mid/post-rolls,
 | `error/PlaybackErrorMapper.kt` | Familles de codes `PlaybackException` (2xxx I/O, 3xxx parsing, 4xxx décodeur, 6xxx DRM) → `PlayerError`. |
 | `analytics/PlaybackAnalyticsLogger.kt` | QoE : TTFF, temps de buffering, changements de qualité, frames perdues, durée de la licence DRM. |
 | `drm/WidevineCapabilities.kt` | Lit le niveau de sécurité Widevine (L1/L3) et le niveau HDCP de l'appareil. |
+| `cast/CastSupport.kt` | **Google Cast** : initialisation (`Cast.initialize`), `CastPlayer` qui enveloppe l'ExoPlayer, `AdAwareTransferCallback` (transfert téléphone ↔ TV qui tient compte des pubs), nom de l'appareil. Voir §8. |
 
 ### `:feature:player` et `:app`
 | Fichier | Rôle |
 |---|---|
-| `PlayerViewModel.kt` | Possède le player (il survit à la rotation), état UI unique, retry, recalage `BEHIND_LIVE_WINDOW`, skip et clic sur la pub, `release()` dans `onCleared`. |
-| `PlayerScreen.kt` | `PlayerView` dans `AndroidView`, pause sur `ON_STOP`, overlay pub (compteur, « Passer dans X s »), overlay d'erreur. |
+| `PlayerViewModel.kt` | Possède le player (il survit à la rotation), état UI unique, retry, recalage `BEHIND_LIVE_WINDOW`, skip et clic sur la pub, `castDevice` via `onDeviceInfoChanged`, pas de pause en arrière-plan quand on caste, `release()` dans `onCleared`. |
+| `PlayerScreen.kt` | `PlayerView` dans `AndroidView`, pause sur `ON_STOP`, bouton Cast (`MediaRouteButton` Compose), « Lecture sur … », overlay pub (compteur, « Passer dans X s »), overlay d'erreur. |
+| `MediaSampleApplication.kt` | Crée l'`AppContainer` et initialise le Cast (`CastSupport.initialize`) avant tout `CastPlayer`. |
 | `catalog/CatalogScreen.kt` | Liste des contenus de démo. |
 | `di/AppContainer.kt` | Composition root : le seul endroit qui instancie les implémentations (équivalent manuel de Hilt). |
 | `ScreenStores.kt` | Un `ViewModelStore` par écran, pour que le retour arrière libère vraiment le player. |
@@ -110,9 +112,13 @@ lecture **MPEG-DASH**, DRM **Widevine**, pubs **VMAP/VAST** (pre/mid/post-rolls,
 | `AnalyticsListener` / `EventLogger` / `PlaybackStatsListener` | Observabilité et debug. | `PlaybackAnalyticsLogger` |
 | `PlaybackException.errorCode` | Codes d'erreur par famille. | `PlaybackErrorMapper` |
 | `PlayerView` | UI prête à l'emploi (SurfaceView, contrôles, marqueurs de pubs). | `PlayerScreen` |
-| `MediaSession` / `MediaSessionService` | Lecture en arrière-plan, notification, Android Auto et TV. *Non utilisé ici, mais à connaître.* | — |
+| `CastPlayer` (`media3-cast`) | `Player` qui délègue à l'ExoPlayer local **ou** à un `RemoteCastPlayer` (la TV), et bascule seul quand une session Cast s'ouvre ou se ferme. | `CastSupport.wrap` |
+| `CastPlayer.TransferCallback` / `PlayerTransferState` | Copie playlist + position d'un player à l'autre au basculement. | `AdAwareTransferCallback` |
+| `DeviceInfo.playbackType` + `onDeviceInfoChanged` | `PLAYBACK_TYPE_LOCAL` ou `PLAYBACK_TYPE_REMOTE` : savoir où se fait la lecture. | `PlayerViewModel`, `PlayerSession.isRemote` |
+| `MediaRouteButton` (composable `media3-cast`) | Bouton Cast : liste des appareils, puis contrôle de la session. | `PlayerScreen` |
+| `MediaSession` / `MediaSessionService` | Lecture en arrière-plan, notification, Android Auto et TV. *Non utilisé ici, mais à connaître* (la doc Cast recommande d'y mettre le `CastPlayer`, voir §8). | — |
 
-Docs : [ExoPlayer](https://developer.android.com/media/media3/exoplayer) · [Personnalisation](https://developer.android.com/media/media3/exoplayer/customization) · [DASH](https://developer.android.com/media/media3/exoplayer/dash) · [DRM](https://developer.android.com/media/media3/exoplayer/drm) · [Insertion de pubs](https://developer.android.com/media/media3/exoplayer/ad-insertion) · [Analytics](https://developer.android.com/media/media3/exoplayer/analytics) · [Événements](https://developer.android.com/media/media3/exoplayer/listening-to-player-events) · [Sources Media3 (GitHub)](https://github.com/androidx/media)
+Docs : [Cast](https://developer.android.com/media/media3/cast) · [ExoPlayer](https://developer.android.com/media/media3/exoplayer) · [Personnalisation](https://developer.android.com/media/media3/exoplayer/customization) · [DASH](https://developer.android.com/media/media3/exoplayer/dash) · [DRM](https://developer.android.com/media/media3/exoplayer/drm) · [Insertion de pubs](https://developer.android.com/media/media3/exoplayer/ad-insertion) · [Analytics](https://developer.android.com/media/media3/exoplayer/analytics) · [Événements](https://developer.android.com/media/media3/exoplayer/listening-to-player-events) · [Sources Media3 (GitHub)](https://github.com/androidx/media)
 
 ---
 
@@ -164,7 +170,8 @@ Docs : [ExoPlayer](https://developer.android.com/media/media3/exoplayer) · [Per
 ---
 
 ## 6. Pistes d'amélioration (à proposer en entretien)
-- Background et notification avec `MediaSessionService`, plus Picture-in-Picture.
+- Background et notification avec `MediaSessionService`, plus Picture-in-Picture. Le `CastPlayer` irait dans ce service (recommandation de la doc Cast), pour garder la télécommande dans la notification.
+- Receiver Cast personnalisé (CAF Web Receiver) : DRM Widevine et pubs côté TV, mesure d'audience côté receiver.
 - Hilt et Navigation Compose à la place de la DI manuelle et de la navigation maison.
 - Tracking persistant (WorkManager) pour ne pas perdre d'impressions hors-ligne.
 - Mid-rolls en pourcentage (`timeOffset="50%"`), qui nécessitent la durée du contenu (`handleContentTimelineChanged`).
@@ -326,3 +333,66 @@ Ce dont je me souviens : le player avait **plusieurs reporters**, avec un jeu di
 - **Résultat** : `______` (effet mesuré, validation par Nielsen ou par la QA ?).
 - **À vérifier avant de le dire** : le correctif exact (filtrer l'item technique ? flush avant le vrai contenu ? les deux ?) et quelles marques utilisaient quels reporters.
 - **Ce que j'en retiens** : un seul endroit pour le flush, `end()` si le contenu change, `stop()` sinon, et des tests de contrat pour que ça ne régresse pas. C'est ce que j'ai reproduit dans ce sample.
+
+---
+
+## 8. Google Cast
+
+### 8.1 Le modèle : un émetteur, un récepteur
+Le téléphone (*sender*) ne lit plus la vidéo : il envoie des commandes au *receiver*, une application
+web qui tourne sur la TV ou le Chromecast. **C'est le receiver qui télécharge et décode le flux.**
+Le téléphone devient une télécommande.
+
+```
+PlayerView / ViewModel ──► CastPlayer  (implémente Player ; c'est un ForwardingPlayer)
+                              │ délègue au player ACTIF
+                              ├── ExoPlayer local      pubs CSAI, DRM, analytics, mesure d'audience
+                              └── RemoteCastPlayer     commandes via le Cast SDK
+                                        ▼
+                                  Receiver sur la TV (Default Media Receiver ou receiver maison)
+```
+
+### 8.2 Ce qui se passe au basculement (lu dans les sources Media3 1.11.1)
+`CastPlayerImpl.updateActivePlayer()` est appelé quand une session Cast s'ouvre ou se ferme :
+1. `transferCallback.transferState(ancien, nouveau)` copie la playlist, l'index, la position, `playWhenReady`… ;
+2. `nouveau.prepare()` si l'ancien n'était pas `IDLE` ;
+3. `ancien.stop()` : l'ExoPlayer local passe en `IDLE`, mais **garde sa playlist**.
+
+Conséquences, toutes gérées dans le code :
+
+| Conséquence | Ce qu'on fait | Où |
+|---|---|---|
+| L'ExoPlayer local passe en `IDLE` | Le traducteur ferme la session de mesure (`Ended(STOPPED)` → Nielsen `end()`). Au retour sur le téléphone, une nouvelle session démarre à la position reprise. Le téléphone ne mesure pas ce que joue la TV. | `PlayerEventTranslator` (déjà en place) |
+| **Piège 1** : pendant une pub, `currentPosition` est la position *dans la pub* | On envoie `contentPosition` : la TV reprend le film au point de coupure, pas à « 5 s du film ». | `AdAwareTransferCallback` |
+| **Piège 2** : au retour, les `MediaItem` sont reconstruits par `DefaultMediaItemConverter`, qui ne sérialise que uri, titre, mimeType et DRM. L'`AdsConfiguration` est perdue. | On récupère l'item d'origine (même `mediaId`) dans la playlist que l'ExoPlayer local a gardée. Les pubs reviennent, et comme l'`adsId` est le même, `VmapAdsLoader` réutilise l'`AdPlaybackState` : les pubs déjà vues restent `PLAYED`. | `AdAwareTransferCallback` |
+| Items techniques (« one pixel ») | Filtrés : ils n'ont aucun sens sur une TV. | `AdAwareTransferCallback` |
+| `CastPlayer.release()` libère aussi l'ExoPlayer local | Un seul `release()` dans `PlayerSession`. | `PlayerFactory.kt` |
+
+### 8.3 Décisions (à savoir défendre)
+- **Le `CastPlayer` enveloppe l'ExoPlayer, mais pubs, analytics et mesure d'audience restent branchés sur l'ExoPlayer local.** Les pubs CSAI sont insérées par ExoPlayer ; sur la TV, c'est le receiver qui lit, donc les pubs et la mesure y relèvent du receiver.
+- **L'UI reçoit un `Player`.** La `PlayerView` pilote le téléphone ou la TV sans le savoir. Le ViewModel ne fait qu'écouter `onDeviceInfoChanged` pour afficher « Lecture sur Salon TV ».
+- **Pas de pause en arrière-plan quand on caste** (`PlayerViewModel.onBackground`) : quitter l'app ne doit pas couper la TV.
+- **Initialisation par code** (`Cast.initialize(CastParams)` dans `Application.onCreate`) plutôt que par la meta-data du manifest. D'après la KDoc de `Cast.initialize`, les options du manifest activent la gestion de MediaSession du Cast SDK, incompatible avec celle de Media3.
+- **Bouton Cast en Compose** (`MediaRouteButton` de `media3-cast`). La variante View (`PlayerView.setMediaRouteButtonViewProvider`) exige une `FragmentActivity`.
+- **Repli sans Cast** : si `CastPlayer.Builder.build()` échoue, on garde l'ExoPlayer seul. Sans Google Play Services, l'initialisation échoue en asynchrone et le bouton ne trouve simplement aucun appareil.
+- **Output Switcher** : `setRemoteToLocalEnabled(true)` + `MediaTransferReceiver` dans le manifest permettent de ramener la lecture depuis le panneau système (Android 13+).
+
+### 8.4 Limites (à annoncer soi-même)
+- **Le player vit dans le ViewModel.** En quittant l'écran, le `CastPlayer` est libéré mais la session Cast continue : la TV joue, sans télécommande dans l'app. La doc Media3 recommande de créer le `CastPlayer` dans un `MediaSessionService` pour cette raison : c'est la prochaine étape.
+- **Default Media Receiver** (aucun `receiverAppId`) : contenus en clair seulement. Pour Widevine et les pubs côté TV, il faut un receiver personnalisé (CAF Web Receiver) enregistré sur la console Cast. *À vérifier sur un vrai Chromecast* : le catalogue Widevine ne devrait pas jouer avec le receiver par défaut ; le contenu « DASH en clair » oui.
+- **Testé en JVM seulement** (deux ExoPlayer de test jouent le téléphone et la « TV »). Pas encore essayé avec un vrai Chromecast.
+- Mesure d'audience pendant le Cast : non faite côté téléphone, par choix. Côté receiver, c'est à cadrer avec Nielsen pour chaque marque.
+
+### 8.5 Tests
+`AdAwareTransferCallbackTest` (Robolectric, 8 tests) :
+- position du contenu envoyée pendant une pub (logique pure **et** vrai ExoPlayer arrêté dans un mid-roll : la « TV » reçoit le film à 5 s) ;
+- au retour, l'item d'origine avec son `AdsConfiguration` est restauré ;
+- item « one pixel » filtré, index recalé ; item courant retiré → position 0 ; playlist vide → `C.INDEX_UNSET`.
+
+### 8.6 Questions probables
+- *Comment l'UI sait-elle qu'on caste ?* `onDeviceInfoChanged` et `deviceInfo.playbackType == PLAYBACK_TYPE_REMOTE`.
+- *Que deviennent les pubs CSAI en Cast ?* Le receiver ne connaît pas notre `AdsLoader`. Soit des pubs côté receiver (pauses publicitaires CAF, VMAP côté receiver), soit du SSAI dans le flux.
+- *Et la DRM ?* Le receiver demande lui-même la licence : il lui faut l'URL et le token, d'où un receiver personnalisé.
+- *Pourquoi un `MediaSessionService` ?* Pour que la télécommande survive à la sortie de l'écran (notification, écran verrouillé, Output Switcher).
+
+Sources : [Media3 Cast](https://developer.android.com/media/media3/cast) · [Créer un CastPlayer](https://developer.android.com/media/media3/cast/create-castplayer) · [CastOptions](https://developer.android.com/media/media3/cast/customize-castoptions) · [Sources `libraries/cast` 1.11.1](https://github.com/androidx/media/tree/1.11.1/libraries/cast/src/main/java/androidx/media3/cast)

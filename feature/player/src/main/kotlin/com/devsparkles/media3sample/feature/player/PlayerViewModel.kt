@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.media3.common.AdViewProvider
+import androidx.media3.common.DeviceInfo
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import com.devsparkles.media3sample.core.domain.model.PlayerError
@@ -31,6 +32,8 @@ data class PlayerUiState(
     val isBuffering: Boolean = true,
     val ad: AdUiInfo? = null,
     val error: PlayerError? = null,
+    /** Nom de l'appareil Cast (« Salon TV ») quand la lecture a lieu dessus, sinon null. */
+    val castDevice: String? = null,
 )
 
 /**
@@ -55,7 +58,10 @@ class PlayerViewModel(
 
     private val session = playerFactory.create()
 
-    /** Exposé en tant que `Player` (interface) : l'UI n'a pas besoin des API ExoPlayer. */
+    /**
+     * Exposé en tant que `Player` (interface) : l'UI n'a pas besoin des API ExoPlayer.
+     * Avec le Cast, c'est un CastPlayer : la PlayerView pilote le téléphone OU la TV sans le savoir.
+     */
     val player: Player get() = session.player
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -78,10 +84,19 @@ class PlayerViewModel(
             }
             _uiState.update { it.copy(error = error.toPlayerError(), isBuffering = false) }
         }
+
+        // Émis par le CastPlayer quand il change de player actif (local <-> TV).
+        // https://developer.android.com/media/media3/cast/create-castplayer
+        override fun onDeviceInfoChanged(deviceInfo: DeviceInfo) = updateCastDevice()
+    }
+
+    private fun updateCastDevice() {
+        _uiState.update { it.copy(castDevice = session.remoteDeviceName()) }
     }
 
     init {
         session.player.addListener(playerListener)
+        updateCastDevice() // une session Cast peut déjà être ouverte (on revient sur l'écran)
         viewModelScope.launch {
             session.adsLoader.currentAd.collect { ad -> _uiState.update { it.copy(ad = ad) } }
         }
@@ -126,14 +141,15 @@ class PlayerViewModel(
     }
 
     /**
-     * App en arrière-plan (ON_STOP) : on met en pause (pas de lecture en background dans ce sample).
+     * App en arrière-plan (ON_STOP) : on met en pause (pas de lecture en background dans ce sample),
+     * SAUF en Cast : la vidéo tourne sur la TV, quitter l'app ne doit pas l'interrompre.
      * Mesure d'audience : la pause SUSPEND la session (Nielsen : `stop()`, d'après les
      * « interruption scenarios » : « Call stop as soon as the app goes to background »), elle
      * ne la TERMINE pas. La fin (`end()`) a lieu à la libération du player (onCleared).
      */
     fun onBackground() {
         session.onAppBackground()
-        session.player.pause()
+        if (!session.isRemote) session.player.pause()
     }
 
     /** Retour au premier plan (ON_START). La lecture reste en pause : l'utilisateur relance. */

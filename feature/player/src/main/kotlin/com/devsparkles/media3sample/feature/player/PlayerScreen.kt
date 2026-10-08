@@ -28,6 +28,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.cast.MediaRouteButton
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.devsparkles.media3sample.core.domain.model.PlayerError
@@ -76,6 +77,23 @@ fun PlayerScreen(viewModel: PlayerViewModel, modifier: Modifier = Modifier) {
                 viewModel.attachAdViewProvider(null)
             },
         )
+
+        // Bouton Cast (Compose, media3-cast) : ouvre la liste des appareils, puis le contrôleur
+        // de la session. Masqué tant qu'aucun appareil n'est découvert sur le Wi-Fi.
+        // Alternative View : playerView.setMediaRouteButtonViewProvider(MediaRouteButtonViewProvider())
+        // le met dans les contrôles de la PlayerView, mais exige une FragmentActivity.
+        MediaRouteButton(Modifier.align(Alignment.TopEnd).safeDrawingPadding().padding(8.dp))
+
+        state.castDevice?.let { device ->
+            // En Cast, la PlayerView n'a plus de vidéo (c'est la TV qui décode) : elle reste
+            // une télécommande (play/pause/seek passent par le CastPlayer).
+            Text(
+                text = "Lecture sur $device",
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
 
         state.ad?.let { ad ->
             AdOverlay(

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -23,6 +24,7 @@ import com.devsparkles.media3sample.core.domain.usecase.LoadAdScheduleUseCase
 import com.devsparkles.media3sample.player.engine.ads.DeferredAdViewProvider
 import com.devsparkles.media3sample.player.engine.ads.VmapAdsLoader
 import com.devsparkles.media3sample.player.engine.analytics.PlaybackAnalyticsLogger
+import com.devsparkles.media3sample.player.engine.cast.CastSupport
 import com.devsparkles.media3sample.player.engine.tracking.PlayerEventTranslator
 
 /**
@@ -58,6 +60,8 @@ class PlayerFactory(
     /** Outils de mesure d'audience, construits dans AppContainer (DI manuelle). */
     private val playbackTrackers: List<PlaybackTracker> = emptyList(),
     private val enableDebugLogs: Boolean = true,
+    /** Google Cast. Exige CastSupport.initialize() dans Application.onCreate(). */
+    private val enableCast: Boolean = true,
 ) {
 
     fun create(): PlayerSession {
@@ -188,12 +192,39 @@ class PlayerFactory(
             sink = { event -> event.dispatchTo(audience) },
         )
 
-        return PlayerSession(player, adsLoader, adViewProvider, translator, audience)
+        // --- 10. Google Cast ------------------------------------------------------------------
+        // Le CastPlayer ENVELOPPE l'ExoPlayer : c'est lui qu'on donne à l'UI. Tout ce qui précède
+        // (AdsLoader, analytics, traducteur de mesure d'audience) reste branché sur l'ExoPlayer
+        // LOCAL, volontairement :
+        //  - les pubs CSAI sont insérées par l'ExoPlayer ; sur la TV c'est le receiver qui lit
+        //    le flux, et les pubs y relèvent du receiver (SSAI / pauses publicitaires CAF) ;
+        //  - au passage sur la TV, l'ExoPlayer reçoit stop() -> IDLE -> le traducteur ferme la
+        //    session (SessionEnded STOPPED -> Nielsen end()). Le téléphone ne mesure pas ce que la
+        //    TV joue : la mesure de la lecture Cast se fait côté receiver.
+        // https://developer.android.com/media/media3/cast/create-castplayer
+        val castPlayer = if (enableCast) {
+            CastSupport.wrap(context, player, log = { message -> Log.d(CAST_TAG, message) })
+        } else {
+            null
+        }
+
+        return PlayerSession(
+            player = castPlayer ?: player,
+            localPlayer = player,
+            adsLoader = adsLoader,
+            adViewProvider = adViewProvider,
+            tracking = translator,
+            audience = audience,
+            castDeviceName = { if (castPlayer != null) CastSupport.connectedDeviceName(context) else null },
+        )
     }
 
     companion object {
         /** Logcat : timeline lisible « callback Media3 → événement normalisé → appel SDK ». */
         const val TRACKING_TAG = "PlaybackTracking"
+
+        /** Logcat : transferts téléphone <-> TV. */
+        const val CAST_TAG = "Cast"
     }
 }
 
@@ -206,12 +237,25 @@ class PlayerFactory(
  * décodeur sécurisé Widevine L1 sur une TV) -> le player suivant échouera.
  */
 class PlayerSession internal constructor(
-    val player: ExoPlayer,
+    /**
+     * Le player à donner à l'UI et à piloter (play, pause, setMediaItem...). Avec le Cast, c'est
+     * un CastPlayer qui délègue à l'ExoPlayer local OU à la TV : l'appelant n'a pas à savoir lequel.
+     */
+    val player: Player,
+    /** L'ExoPlayer du téléphone (pubs, DRM, analytics, mesure d'audience y sont branchés). */
+    val localPlayer: ExoPlayer,
     val adsLoader: VmapAdsLoader,
     val adViewProvider: DeferredAdViewProvider,
     private val tracking: PlayerEventTranslator,
     private val audience: PlaybackTracker,
+    private val castDeviceName: () -> String? = { null },
 ) {
+    /** Vrai quand la lecture a lieu sur un appareil Cast (DeviceInfo.PLAYBACK_TYPE_REMOTE). */
+    val isRemote: Boolean get() = CastSupport.isRemote(player)
+
+    /** Nom de l'appareil Cast connecté (« Salon TV »), ou null en lecture locale. */
+    fun remoteDeviceName(): String? = if (isRemote) castDeviceName() else null
+
     private var inBackground = false
 
     /**
@@ -234,6 +278,10 @@ class PlayerSession internal constructor(
         // AVANT player.release() : la fin de session lit la dernière position du player.
         tracking.release()
         adsLoader.setPlayer(null)
+        // CastPlayer.release() libère AUSSI le player local (CastPlayerImpl.handleRelease) ;
+        // sans Cast, `player` EST l'ExoPlayer. Un seul appel dans les deux cas.
+        // Note : la session Cast, elle, reste ouverte (la TV continue) ; c'est le Cast SDK qui
+        // la possède, pas ce player.
         player.release()
         adsLoader.release()
     }

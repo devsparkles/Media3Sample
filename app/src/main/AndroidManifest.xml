@@ -35,6 +35,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          Google Cast : Output Switcher (Android 13+). Permet de ramener la lecture de la TV vers
+          le téléphone depuis le panneau système (CastParams.setRemoteToLocalEnabled(true)).
+          https://developer.android.com/media/media3/cast/create-castplayer
+          Pas de meta-data OPTIONS_PROVIDER_CLASS_NAME : on initialise par code
+          (CastSupport.initialize dans MediaSampleApplication), ce que recommande Media3.
+        -->
+        <receiver android:name="androidx.mediarouter.media.MediaTransferReceiver" />
     </application>
 
 </manifest>
